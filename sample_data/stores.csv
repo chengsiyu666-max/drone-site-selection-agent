@@ -1,0 +1,131 @@
+store_id,name,city,district_tag,lat,lon,rf_sales_10k,area_sqm,initial_investment_10k,annual_fixed_cost_10k,area_sqm_old,initial_investment_10k_old,annual_fixed_cost_10k_old,location_score,is_existing
+B01,Chaoyang Sanlitun,beijing,Chaoyang,39.933,116.4542,980,858,137.9,93.4,950,380,120,0.73,0
+B02,Chaoyang Dawanglu,beijing,Chaoyang,39.9079,116.4726,940,950,133.2,91.2,900,360,115,0.724,0
+B03,Chaoyang Guomao,beijing,Chaoyang,39.9087,116.4644,1020,880,142.5,95.5,1000,400,130,0.733,0
+B04,Chaoyang Shuangjing,beijing,Chaoyang,39.8951,116.4691,890,826,127.7,88.6,850,340,110,0.727,0
+B05,Chaoyang Jinsong,beijing,Chaoyang,39.8844,116.4539,860,989,124.8,87.3,830,320,105,0.738,0
+B06,Chaoyang劲松,beijing,Chaoyang,39.881,116.4487,850,862,123.7,86.8,820,315,104,0.741,0
+B07,Chaoyang Tuanjiehu,beijing,Chaoyang,39.9275,116.4435,910,979,130.6,90,880,350,112,0.745,0
+B08,Chaoyang Liufang,beijing,Chaoyang,39.9613,116.4431,870,873,124.7,87.2,840,330,107,0.703,0
+B09,Chaoyang Wangjing,beijing,Chaoyang,40.0015,116.4832,960,834,131.7,90.4,920,370,118,0.625,0
+B10,Chaoyang望京西,beijing,Chaoyang,40.0051,116.4706,930,940,128.5,89,890,355,114,0.627,0
+B11,Haidian Zhongguancun,beijing,Haidian,39.9836,116.3107,1010,807,140.4,94.5,980,395,128,0.709,0
+B12,Haidian Wudaokou,beijing,Haidian,40.0089,116.3307,950,912,133.1,91.1,910,365,116,0.691,0
+B13,Haidian Xierqi,beijing,Haidian,40.0539,116.3093,880,851,122.8,86.3,850,335,108,0.617,0
+B14,Haidian Shangdi,beijing,Haidian,40.0389,116.3084,870,899,122.4,86.1,840,330,107,0.637,0
+B15,Haidian Malianwa,beijing,Haidian,39.9438,116.3007,830,867,121.4,85.7,820,310,102,0.737,0
+B16,Haidian Renmin Daxue,beijing,Haidian,39.9528,116.3179,900,870,129.5,89.5,870,345,111,0.747,0
+B17,Haidian Weigongcun,beijing,Haidian,39.9508,116.3302,860,847,125.5,87.6,830,325,106,0.761,0
+B18,Haidian Gongzhufen,beijing,Haidian,39.9139,116.3014,890,975,128.6,89,860,340,110,0.751,0
+B19,Fengtai Liuliqiao,beijing,Fengtai,39.8627,116.2936,810,982,112.7,81.6,810,300,100,0.541,0
+B20,Fengtai Muxiyuan,beijing,Fengtai,39.8509,116.3832,790,985,113.7,82.2,800,295,98,0.604,0
+B21,Fengtai Xipingmen,beijing,Fengtai,39.8891,116.3265,820,842,115.4,82.9,815,305,101,0.592,0
+B22,Fengtai Dahongmen,beijing,Fengtai,39.831,116.3712,800,920,112.6,81.6,808,298,99,0.57,0
+B23,Fengtai Fangzhuang,beijing,Fengtai,39.8586,116.4226,840,991,118.5,84.3,825,315,104,0.618,0
+B24,Fengtai Sihui West,beijing,Fengtai,39.9122,116.5003,870,861,120.4,85.2,840,332,108,0.58,0
+B25,Xicheng Xidan,beijing,Xicheng,39.912,116.3614,970,975,144.6,96.6,940,375,120,0.943,0
+B26,Xicheng Chegongzhuang,beijing,Xicheng,39.939,116.3468,880,847,132.8,91.1,850,338,109,0.909,0
+B27,Xicheng Fuchengmen,beijing,Xicheng,39.9228,116.344,850,944,129.6,89.6,830,320,105,0.919,0
+B28,Xicheng Baizhifang,beijing,Xicheng,39.8853,116.3461,820,865,127.1,88.4,815,308,102,0.921,0
+B29,Dongcheng Dongzhimen,beijing,Dongcheng,39.9366,116.4289,930,887,137.5,93.3,895,358,114,0.877,0
+B30,Dongcheng Andingmen,beijing,Dongcheng,39.9441,116.4055,900,928,133.9,91.6,865,345,111,0.872,0
+B31,Dongcheng Chaoyangmen,beijing,Dongcheng,39.92,116.4337,940,997,139.3,94.1,905,362,115,0.894,0
+B32,Dongcheng Jiaodaokou,beijing,Dongcheng,39.9388,116.3973,870,875,130.7,90,840,332,108,0.879,0
+B33,Shijingshan Bajiao,beijing,Shijingshan,39.9167,116.191,780,982,104.1,77.7,800,292,97,0.377,0
+B34,Shijingshan Pingguoyuan,beijing,Shijingshan,39.9247,116.2019,760,862,104.6,77.9,795,285,95,0.388,0
+B35,Tongzhou Tongzhou Core,beijing,Tongzhou,39.9026,116.6616,830,882,106.9,78.9,825,312,103,0.316,0
+B36,Tongzhou Liyuan,beijing,Tongzhou,39.8759,116.6943,800,996,102.5,76.8,810,300,100,0.273,0
+B37,Tongzhou Tuqiao,beijing,Tongzhou,39.8738,116.7241,780,994,99.3,75.4,800,292,97,0.238,0
+B38,Changping Tiantongyuan,beijing,Changping,40.0921,116.4059,870,885,109.4,79.9,845,332,108,0.277,0
+B39,Changping Huilongguan,beijing,Changping,40.0736,116.3518,850,972,108.2,79.4,830,320,105,0.298,0
+B40,Changping Shahe,beijing,Changping,40.0979,116.3347,800,858,101.9,76.6,808,298,99,0.256,0
+B41,Changping Gucheng,beijing,Changping,40.2165,116.2274,750,873,93.3,72.6,790,280,93,0.121,0
+B42,Shunyi Shunyi Core,beijing,Shunyi,40.1289,116.6546,790,971,97,74.3,800,295,98,0.143,0
+B43,Shunyi Houshayu,beijing,Shunyi,40.0847,116.6268,760,884,96.9,74.3,793,285,95,0.207,0
+B44,Daxing Yizhuang,beijing,Daxing,39.7968,116.5023,840,986,110.2,80.4,828,318,104,0.379,0
+B45,Daxing Daxing Core,beijing,Daxing,39.727,116.3369,800,901,103.1,77.2,808,298,99,0.292,0
+B46,Daxing Huangcun,beijing,Daxing,39.7612,116.3433,780,865,103,77.2,800,290,97,0.346,0
+B47,Mentougou Mentougou Core,beijing,Mentougou,39.9407,116.1038,720,827,94.9,73.4,785,270,90,0.158,0
+B48,Mentougou Longquan,beijing,Mentougou,39.9168,116.1447,710,871,97.1,74.4,780,265,88,0.211,0
+B49,Fangshan Fangshan Core,beijing,Fangshan,39.739,116.1388,760,908,93.6,72.8,793,282,94,0.125,0
+B50,Fangshan Liangxiang,beijing,Fangshan,39.7351,116.1907,740,809,95.2,73.5,788,276,92,0.167,0
+B51,Chaoyang Chaoqing,beijing,Chaoyang,39.9706,116.522,870,998,122.1,86,842,332,108,0.63,0
+B52,Chaoyang Baiziwan,beijing,Chaoyang,39.8903,116.4898,860,983,123.5,86.7,835,328,107,0.701,0
+B53,Haidian Qinghe,beijing,Haidian,40.0326,116.3437,840,813,120,85.1,828,320,105,0.664,0
+B54,Haidian Xueqing Lu,beijing,Haidian,40.049,116.3418,820,854,117,83.7,816,308,102,0.639,0
+B55,Fengtai Nanyuan,beijing,Fengtai,39.8009,116.3773,790,885,110.4,80.6,802,294,98,0.526,0
+B56,Dongcheng Beixinqiao,beijing,Dongcheng,39.9427,116.4119,890,929,132.8,91.1,858,340,110,0.874,0
+B57,Xicheng Guanganmen,beijing,Xicheng,39.895,116.3465,840,946,128.7,89.1,827,318,105,0.926,0
+B58,Tongzhou Baliqiao,beijing,Tongzhou,39.9203,116.6102,800,975,106,78.5,808,298,99,0.376,0
+B59,Changping Xisanqi,beijing,Changping,40.0585,116.3524,830,974,107.1,78.9,820,312,103,0.321,0
+B60,Shunyi Airport Zone,beijing,Shunyi,40.0696,116.6046,810,978,102.4,76.8,813,304,101,0.243,0
+H01,Shangcheng Qingbo,hangzhou,Shangcheng,30.2541,120.1551,960,995,141.1,93.1,940,375,120,0.815,0
+H02,Shangcheng Wulin,hangzhou,Shangcheng,30.2678,120.1513,980,837,141.6,93.5,950,380,122,0.835,0
+H03,Shangcheng Nanshan Lu,hangzhou,Shangcheng,30.2428,120.1481,920,880,140.6,92.7,900,358,115,0.796,0
+H04,Shangcheng Longgou,hangzhou,Shangcheng,30.2367,120.1679,870,865,137.1,91.2,840,332,108,0.785,0
+H05,Gongshu Daguan,hangzhou,Gongshu,30.3042,120.1311,910,912,139.2,91.6,880,350,113,0.745,0
+H06,Gongshu Shangtang,hangzhou,Gongshu,30.3191,120.1294,880,952,137.8,90.8,852,338,109,0.724,0
+H07,Gongshu Gucui,hangzhou,Gongshu,30.3005,120.1226,850,924,134,89.5,830,322,106,0.742,0
+H08,Gongshu Changqing,hangzhou,Gongshu,30.2916,120.1368,840,995,132.9,89.3,825,318,105,0.765,0
+H09,Xihu Wensan Lu,hangzhou,Xihu,30.2795,120.1024,930,831,140.6,92.7,895,358,115,0.796,0
+H10,Xihu Gudang,hangzhou,Xihu,30.2701,120.0869,900,815,140,92.3,870,345,112,0.776,0
+H11,Xihu Zhuantang,hangzhou,Xihu,30.2288,120.0601,800,890,127.1,86.6,808,298,99,0.721,0
+H12,Xihu Lingyin,hangzhou,Xihu,30.2532,120.097,820,848,130.4,88.5,815,308,102,0.783,0
+H13,Binjiang Changhe,hangzhou,Binjiang,30.2085,120.1991,940,929,139.9,92.2,908,362,116,0.771,0
+H14,Binjiang Xixingqiao,hangzhou,Binjiang,30.1908,120.2091,900,973,139.1,91.5,870,345,112,0.741,0
+H15,Binjiang Puyan,hangzhou,Binjiang,30.183,120.2145,870,926,136.5,90.3,842,332,108,0.726,0
+H16,Binjiang Dongxin Ave,hangzhou,Binjiang,30.2063,120.2203,920,952,139.4,91.8,892,355,114,0.752,0
+H17,Xiaoshan Chengxiang,hangzhou,Xiaoshan,30.1869,120.2657,870,903,133.1,86.7,842,330,108,0.512,0
+H18,Xiaoshan Yucai,hangzhou,Xiaoshan,30.1792,120.2745,840,858,129.9,85.3,826,318,105,0.495,0
+H19,Xiaoshan Jiulong Ave,hangzhou,Xiaoshan,30.173,120.3036,810,813,125.6,83.4,810,302,101,0.459,0
+H20,Xiaoshan Xincheng,hangzhou,Xiaoshan,30.1622,120.2702,790,929,123.2,82.7,804,295,98,0.48,0
+H21,Xiaoshan Airport Zone,hangzhou,Xiaoshan,30.2271,120.4343,750,962,116.3,78.7,790,280,93,0.33,0
+H22,Yuhang Liangzhu,hangzhou,Yuhang,30.3819,120.0123,820,981,126.5,83.3,815,308,102,0.425,0
+H23,Yuhang Yuhang Core,hangzhou,Yuhang,30.4231,120.1022,800,958,124,82.6,808,298,99,0.437,0
+H24,Yuhang Cangqian,hangzhou,Yuhang,30.4019,120.0758,780,914,121.6,81.9,800,290,97,0.454,0
+H25,Yuhang Qiaosi,hangzhou,Yuhang,30.3602,120.0981,810,959,126.3,84.4,810,302,101,0.526,0
+H26,Yuhang Pingyao,hangzhou,Yuhang,30.4598,120.0552,760,950,118,79.6,793,284,94,0.361,0
+H27,Linping Linping Core,hangzhou,Linping,30.4188,120.3022,800,981,122.6,80.7,808,298,99,0.314,0
+H28,Linping Tangqi,hangzhou,Linping,30.4752,120.2842,750,884,115.5,77.6,790,280,93,0.256,0
+H29,Linping Chongxian,hangzhou,Linping,30.5019,120.3285,730,831,112.2,75.8,785,272,91,0.189,0
+H30,Fuyang Fuyang Core,hangzhou,Fuyang,30.0598,119.9519,800,978,120.7,78.1,808,298,99,0.149,0
+H31,Fuyang Xindeng,hangzhou,Fuyang,30.015,119.9082,760,862,115.4,76.2,793,283,94,0.132,0
+H32,Fuyang Yinhu,hangzhou,Fuyang,30.0742,119.962,780,929,118.5,77.7,800,290,97,0.175,0
+H33,Jiande Jiande Core,hangzhou,Jiande,29.4842,119.0063,700,956,106.9,72.7,780,262,87,0.055,0
+H34,Tonglu Tonglu Core,hangzhou,Tonglu,29.7931,119.6869,720,862,109.7,73.8,785,268,89,0.077,0
+H35,Chun'an Chun'an Core,hangzhou,Chun'an,29.6064,119.0427,680,952,104.5,72,775,255,85,0.066,0
+H36,Shangcheng Qianjiang New,hangzhou,Shangcheng,30.2317,120.2108,970,859,139.2,91.6,945,378,122,0.746,0
+H37,Shangcheng Wangjiang,hangzhou,Shangcheng,30.2489,120.1882,940,848,140.3,92.5,908,362,116,0.786,0
+H38,Gongshu Banshan,hangzhou,Gongshu,30.3353,120.1501,860,843,134.9,89.5,835,325,107,0.706,0
+H39,Gongshu Miqiao,hangzhou,Gongshu,30.3244,120.1602,840,912,132.5,88.7,826,318,105,0.723,0
+H40,Xihu Shuangliu,hangzhou,Xihu,30.2618,120.0731,810,949,128.8,87.6,810,302,101,0.756,0
+H41,Binjiang Puqian Bridge,hangzhou,Binjiang,30.1982,120.1823,890,935,139.6,92,858,340,110,0.766,0
+H42,Xiaoshan Zidong,hangzhou,Xiaoshan,30.2053,120.3398,830,827,128,84.1,820,312,103,0.442,0
+H43,Xiaoshan Guali,hangzhou,Xiaoshan,30.1397,120.3871,780,829,120.3,80.2,800,290,97,0.337,0
+H44,Yuhang Xianlin,hangzhou,Yuhang,30.4089,120.0325,790,904,122.5,81.7,804,295,98,0.413,0
+H45,Yuhang Renhe,hangzhou,Yuhang,30.3842,120.1428,800,827,124.8,83.6,808,298,99,0.508,0
+H46,Linping Nanyan,hangzhou,Linping,30.4412,120.2816,760,929,117.3,78.8,793,283,94,0.303,0
+H47,Qiantang Jinsha Lake,hangzhou,Qiantang,30.3042,120.4228,850,886,126.7,81.6,828,320,106,0.272,0
+H48,Qiantang Baiyang,hangzhou,Qiantang,30.2853,120.3891,820,929,125.3,81.7,815,308,102,0.321,0
+H49,Qiantang Xiasha,hangzhou,Qiantang,30.3195,120.3743,840,827,128,82.8,826,318,105,0.333,0
+H50,Qiantang Xianqian,hangzhou,Qiantang,30.3069,120.3985,810,862,123.8,81,810,302,101,0.304,0
+H51,Shangcheng Caishi Bridge,hangzhou,Shangcheng,30.2589,120.1725,910,870,141,93,878,350,113,0.813,0
+H52,Gongshu Xiahe Lu,hangzhou,Gongshu,30.2851,120.1489,870,868,137.1,91.2,842,332,108,0.783,0
+H53,Xihu Shuguang Lu,hangzhou,Xihu,30.2741,120.1278,890,903,140.3,93,858,340,110,0.831,0
+H54,Binjiang Bin'an Lu,hangzhou,Binjiang,30.196,120.2412,860,986,135.1,89.7,835,325,107,0.721,0
+H55,Yuhang Zhonggou,hangzhou,Yuhang,30.3721,120.0612,790,979,123.2,82.8,804,295,98,0.482,0
+H56,Linping Yunhe,hangzhou,Linping,30.4621,120.315,740,887,114.2,77.1,788,276,92,0.25,0
+H57,Xiaoshan Wenhua Lu,hangzhou,Xiaoshan,30.1951,120.2898,810,855,126,83.9,810,302,101,0.494,0
+H58,Qiantang Wanxiang City,hangzhou,Qiantang,30.3302,120.4102,830,973,126.2,81.5,820,312,103,0.282,0
+H59,Fuyang Changkou,hangzhou,Fuyang,30.0316,119.9815,750,952,114.2,75.9,790,280,93,0.136,0
+H60,Gongshu Desheng,hangzhou,Gongshu,30.2964,120.153,860,929,135.6,90.4,836,325,107,0.767,0
+EX_BJ_01,某硬折扣社区超市北京(商投广场店),beijing,Mentougou,39.9354 ,116.1044 ,850,996,125.7,86.7,0,0,0,0.65,1
+EX_BJ_02,某硬折扣社区超市北京(昌平鼓楼南街店),beijing,Changping,40.2240 ,116.2331 ,860,867,130,88.2,0,0,0,0.65,1
+EX_BJ_03,某硬折扣社区超市北京(昌平首开广场店),beijing,Changping,40.0804 ,116.3559 ,915,986,128.6,77.2,0,0,0,0.65,1
+EX_BJ_04,某硬折扣社区超市北京(朝阳天泰苑店),beijing,Chaoyang,39.9201 ,116.5641 ,917,986,127.5,76.5,0,0,0,0.65,1
+EX_BJ_05,某硬折扣社区超市北京(房山嘉州广场店),beijing,Fangshan,39.7675 ,116.1658 ,890,815,114.7,83.2,0,0,0,0.65,1
+EX_BJ_06,某硬折扣社区超市北京(临平逸景花苑店),beijing,Linping,39.9201 ,116.5641 ,1000,819,123.5,84.7,0,0,0,0.65,1
+EX_HZ_01,某硬折扣社区超市杭州(大关路店),hangzhou,Gongshu,30.3105 ,120.1531 ,894,813,130.7,79.3,0,0,0,0.65,1
+EX_HZ_02,某硬折扣社区超市杭州(美达丽阳店),hangzhou,Gongshu,30.2818 ,120.1537 ,992,935,132.5,75.2,0,0,0,0.65,1
+EX_HZ_03,某硬折扣社区超市杭州(下沙欢肆店),hangzhou,Qiantang,30.3105 ,120.3352 ,923,879,124.8,82.3,0,0,0,0.65,1
+EX_HZ_04,某硬折扣社区超市杭州(拱墅北景园广场店),hangzhou,Gongshu,30.3393 ,120.1852 ,1100,923,129.2,89.2,0,0,0,0.65,1

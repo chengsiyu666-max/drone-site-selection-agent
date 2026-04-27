@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>某硬折扣社区超市 · 选址智能体</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <div class="bg-texture"></div>
+
+    <!-- ============== TOP NAV ============== -->
+    <header class="top-nav">
+      <div class="brand">
+        <div class="brand-logo brand-logo-mark" aria-hidden="true">S</div>
+        <div class="brand-text">
+          <div class="brand-name">某硬折扣社区超市 <em>· 选址智能体</em></div>
+          <div class="brand-sub">Site Intelligence Platform</div>
+        </div>
+      </div>
+
+      <nav class="stage-stepper" id="timelineSteps" role="tablist" aria-label="阶段视图切换">
+        <button class="step active" data-step="stage1" data-index="1" role="tab" aria-selected="true">
+          <span>单块扫盘</span>
+        </button>
+        <button class="step" data-step="stage2" data-index="2" role="tab" aria-selected="false">
+          <span>排他优选</span>
+        </button>
+        <button class="step" data-step="stage3" data-index="3" role="tab" aria-selected="false">
+          <span>全域网络</span>
+        </button>
+      </nav>
+
+      <div class="top-nav-right">
+        <select class="nav-city" name="focus_city" id="focusCity" form="modelForm">
+          <option value="beijing" selected>北京</option>
+          <option value="hangzhou">杭州</option>
+        </select>
+        <div class="sponsor-badge">
+          <span>某团商赛 Demo</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ============== MAIN WORKSPACE ============== -->
+    <main class="workspace">
+      <!-- ----- LEFT: PARAMS ----- -->
+      <aside class="panel-params card accent">
+        <div class="card-head">
+          <div>
+            <div class="card-eyebrow">Parameters</div>
+            <h2>参数配置</h2>
+            <p class="card-sub">设定城市阈值与网络规模，运行智能选址求解器。</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <form id="modelForm" class="stack">
+            <p class="form-section">城市 · 财务阈值</p>
+
+            <div class="city-readout" id="cityParamBox">
+              <div>WACC<b id="cityWacc">—</b></div>
+              <div>NPV阈值<b id="cityNpvDefault">—</b></div>
+              <div>DPP阈值<b id="cityDppDefault">—</b></div>
+            </div>
+
+            <label>
+              10年NPV阈值（万元）
+              <input type="number" step="0.1" name="npv_threshold_10k" id="npvThreshold" placeholder="默认随城市" />
+            </label>
+
+            <label>
+              动态回收期DPP（年）
+              <input type="number" step="0.1" name="dpp_threshold_years" id="dppThreshold" placeholder="默认5.0" />
+            </label>
+
+            <label>
+              坪效阈值（万元/㎡·年）
+              <input type="number" step="0.1" name="revenue_per_sqm_threshold_10k" id="revenueThreshold" placeholder="默认1.15" />
+            </label>
+
+            <p class="form-section">网络规划</p>
+
+            <label>
+              RDC 数量上限 P
+              <input type="number" id="pStepper" value="5" min="1" max="8" />
+            </label>
+
+            <input type="hidden" name="p_values" id="pValues" value="1,2,3,4,5" />
+
+            <label>
+              阶段二最多新增门店
+              <input type="number" name="max_new_stores" value="20" min="1" max="30" />
+            </label>
+
+            <details class="advanced-details">
+              <summary>高级 · 路网与 API</summary>
+              <div class="stack" style="padding-top: 8px;">
+                <label class="inline-check">
+                  <input type="checkbox" name="use_road_distance" id="useRoadDistance" />
+                  使用高德路网距离（真实GIS）
+                </label>
+                <label>
+                  高德 AK（启用路网距离时填写）
+                  <input type="text" name="amap_key" id="amapKey" placeholder="你的高德 Web 服务 AK" />
+                </label>
+              </div>
+            </details>
+
+            <p class="form-section">数据输入</p>
+            <details class="upload-details">
+              <summary>上传 CSV 数据文件</summary>
+              <div class="stack" style="padding-top: 8px;">
+                <label>
+                  门店数据 CSV（必填）
+                  <input type="file" name="store_file" accept=".csv,.xlsx,.xls" />
+                </label>
+                <label>
+                  RDC 数据 CSV（必填）
+                  <input type="file" name="rdc_file" accept=".csv,.xlsx,.xls" />
+                </label>
+                <label>
+                  距离矩阵 CSV（可选）
+                  <input type="file" name="distance_file" accept=".csv,.xlsx,.xls" />
+                </label>
+              </div>
+            </details>
+
+            <div class="actions">
+              <button type="submit" class="btn btn-primary">运行上传数据</button>
+              <button type="button" id="runSampleBtn" class="btn btn-ghost">运行样例</button>
+            </div>
+
+            <div class="sample-links">
+              <a href="/api/sample/stores.csv">stores.csv</a>
+              <a href="/api/sample/rdcs.csv">rdcs.csv</a>
+              <a href="/api/sample/distances.csv">distances.csv</a>
+            </div>
+
+            <pre id="status" class="status">等待运行指令...</pre>
+          </form>
+        </div>
+      </aside>
+
+      <!-- ----- CENTER: STAGE (KPI + MAP) ----- -->
+      <section class="stage-wrap">
+        <div class="kpi-overlay" id="summaryCards">
+          <div class="kpi"><div class="kpi-title">门店总量</div><div class="kpi-value">—</div></div>
+          <div class="kpi"><div class="kpi-title">阶段一通过</div><div class="kpi-value">—</div></div>
+          <div class="kpi"><div class="kpi-title">阶段二入选</div><div class="kpi-value">—</div></div>
+          <div class="kpi"><div class="kpi-title">最优总成本</div><div class="kpi-value">—</div></div>
+        </div>
+
+        <div class="map-canvas">
+          <p id="stepIntro" class="step-intro">阶段一：查看候选门店在 NPV、DPP 与坪效阈值下的通过情况。</p>
+
+          <aside class="map-dock" id="mapDock">
+            <button type="button" class="dock-toggle" id="dockToggle" title="收起/展开地图工具" aria-label="收起地图工具">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M10 3l-5 5 5 5"/>
+              </svg>
+            </button>
+            <div class="dock-title">地图工具</div>
+
+            <div class="legend-grid">
+              <span><i class="dot pass"></i>通过</span>
+              <span><i class="dot fail"></i>淘汰</span>
+              <span><i class="dot selected"></i>阶段二入选</span>
+              <span><i class="dot existing-store"></i>阶段三现存</span>
+              <span><i class="dot new-store"></i>阶段三新增</span>
+              <span><i class="legend-warehouse">🏭</i>RDC仓库</span>
+            </div>
+
+            <div class="dock-row">
+              <label for="markerScale">点位</label>
+              <input type="range" id="markerScale" min="0.7" max="1.8" step="0.1" value="1.0" />
+            </div>
+            <div class="dock-row">
+              <label for="lineOpacity">连线</label>
+              <input type="range" id="lineOpacity" min="0.2" max="1.0" step="0.05" value="0.65" />
+            </div>
+
+            <label class="inline-check">
+              <input type="checkbox" id="showPolicyRings" checked />
+              政策圈层
+            </label>
+            <label class="inline-check">
+              <input type="checkbox" id="autoFitMap" checked />
+              自动缩放
+            </label>
+
+            <div class="dock-actions">
+              <button type="button" id="toggleCustomRdc" class="btn btn-small">自定义 RDC</button>
+              <button type="button" id="cycleStagesBtn" class="btn btn-small">自动轮播</button>
+            </div>
+
+            <div class="dock-hint" id="customHint">点击地图可添加候选 RDC；若落入五环 / 绕城内会触发红色告警。</div>
+            <div class="dock-hint" id="interactionState" style="color: var(--wine-dark); font-weight: 600;">当前：手动模式</div>
+          </aside>
+
+          <div id="map"></div>
+        </div>
+      </section>
+
+      <!-- ----- INSIGHT ROW ----- -->
+      <section class="insight-row">
+        <article class="card mini-section accent">
+          <div class="card-head">
+            <div>
+              <div class="card-eyebrow">Cost Split</div>
+              <h3>全周期折现总成本（RDC vs 配送）</h3>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="costBars" class="cost-bars"></div>
+          </div>
+        </article>
+
+        <article class="card mini-section">
+          <div class="card-head">
+            <div>
+              <div class="card-eyebrow">Scenarios</div>
+              <h3>P 情景比对</h3>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="scenarioCards" class="scenario-cards"></div>
+          </div>
+        </article>
+
+        <article class="card mini-section">
+          <div class="card-head">
+            <div>
+              <div class="card-eyebrow">Alerts</div>
+              <h3>关键硬约束提示</h3>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="hardAlerts" class="alerts"></div>
+          </div>
+        </article>
+      </section>
+
+      <!-- ----- DETAIL TABLE ----- -->
+      <section class="card detail-card">
+        <div class="card-head">
+          <div>
+            <div class="card-eyebrow">Detail</div>
+            <h2>阶段一至阶段三明细</h2>
+            <p class="card-sub">按阶段切换明细表，快速核对地图展示与底层数据。</p>
+          </div>
+        </div>
+        <div class="table-tabs" role="tablist" aria-label="明细表切换">
+          <button class="tab active" data-tab="stage1" role="tab" aria-selected="true">阶段一筛选表</button>
+          <button class="tab" data-tab="stage2" role="tab" aria-selected="false">阶段二优选表</button>
+          <button class="tab" data-tab="assign" role="tab" aria-selected="false">阶段三门店归属</button>
+        </div>
+        <div id="tableWrap" class="table-wrap"></div>
+      </section>
+    </main>
+
+    <!-- ============== AI CHAT ============== -->
+    <button id="chatFab" class="chat-fab" title="AI 选址助手">
+      <span class="fab-avatar avatar-mark" aria-hidden="true">S</span>
+      <span>AI 选址助手</span>
+      <span class="fab-spark"></span>
+    </button>
+
+    <aside id="chatPanel" class="chat-panel" data-mode="mini" aria-hidden="true">
+      <div class="chat-panel-header">
+        <span class="chat-header-avatar avatar-mark" aria-hidden="true">S</span>
+        <div class="chat-header-title">
+          <span class="name">AI 选址分析助手</span>
+          <span class="sub">Community Supermarket Copilot</span>
+        </div>
+        <div class="chat-header-actions">
+          <button type="button" id="chatHistoryBtn" title="对话历史">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="5" x2="13" y2="5"/><line x1="3" y1="8" x2="13" y2="8"/><line x1="3" y1="11" x2="13" y2="11"/></svg>
+          </button>
+          <button type="button" id="chatSizeBtn" title="切换大小">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3"/></svg>
+          </button>
+          <button type="button" id="chatPanelClose" title="关闭">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="chat-body">
+        <aside id="chatSidebar" class="chat-sidebar" aria-hidden="true">
+          <button type="button" id="chatNewBtn" class="chat-new-btn">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
+            <span>新建对话</span>
+          </button>
+          <div id="chatSessionList" class="chat-session-list"></div>
+        </aside>
+        <div class="chat-main">
+          <div id="chatModelBadge" class="chat-model-badge">正在连接 OpenClaw...</div>
+          <div id="chatMessages" class="chat-messages"></div>
+          <div class="chat-input-area">
+            <textarea id="chatInput" rows="2" placeholder="问我关于选址结果的任何问题... (Enter 发送)"></textarea>
+            <button id="chatSendBtn" class="btn btn-primary">发送</button>
+          </div>
+          <div class="agent-reports">
+            <button type="button" id="agentReportsToggle" class="btn btn-small">📄 查看分析报告</button>
+            <div id="agentReportsList" class="agent-reports-list" hidden></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

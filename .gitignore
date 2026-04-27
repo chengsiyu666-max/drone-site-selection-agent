@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+start.sh
+
+# Runtime outputs
+*.log
+flask.log
+agent_outputs/
+
+# OS / IDE metadata
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# Local legacy scratch files
+optimizer_legacy.py
