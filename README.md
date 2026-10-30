@@ -9,6 +9,8 @@
 ![MCP](https://img.shields.io/badge/Protocol-MCP-blueviolet)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+![GIS 选址看板：三阶段地图、参数面板与机坪-起降点连线](docs/assets/dashboard.png)
+
 ## 项目简介
 
 本项目解决的问题：在低空物流场景中，如何为一个城市决定 **哪些起降点（pad）值得服务、在哪些机坪（vertiport）投放无人机、每个机坪覆盖哪些起降点**，以在运力约束下最大化配送需求覆盖。
@@ -31,6 +33,8 @@
 ```
 
 核心设计决策：**MCP 与内部编排器共用同一份工具实现**（`agent_tools._TOOL_IMPLS`），协议层只是适配，不复制业务逻辑。
+
+![Agent 对话台：任务输入、城市选择、数据上传与工具轨迹](docs/assets/agent.png)
 
 ## 主要能力
 
