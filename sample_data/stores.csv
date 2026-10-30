@@ -1,4 +1,4 @@
-store_id,name,city,district_tag,lat,lon,rf_sales_10k,area_sqm,initial_investment_10k,annual_fixed_cost_10k,area_sqm_old,initial_investment_10k_old,annual_fixed_cost_10k_old,location_score,is_existing
+pad_id,name,city,district_tag,lat,lon,rf_sales_10k,area_sqm,initial_investment_10k,annual_fixed_cost_10k,area_sqm_old,initial_investment_10k_old,annual_fixed_cost_10k_old,location_score,is_existing
 B01,Chaoyang Sanlitun,beijing,Chaoyang,39.933,116.4542,980,858,137.9,93.4,950,380,120,0.73,0
 B02,Chaoyang Dawanglu,beijing,Chaoyang,39.9079,116.4726,940,950,133.2,91.2,900,360,115,0.724,0
 B03,Chaoyang Guomao,beijing,Chaoyang,39.9087,116.4644,1020,880,142.5,95.5,1000,400,130,0.733,0

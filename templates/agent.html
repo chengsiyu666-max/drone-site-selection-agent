@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>选址 Agent 对话</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --fg:#e2e8f0; --dim:#94a3b8; --acc:#38bdf8; --ok:#4ade80; --err:#f87171; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif; }
+  .wrap { max-width:920px; margin:0 auto; padding:20px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin-bottom:16px; }
+  .sub a { color:var(--acc); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px; }
+  label { display:block; color:var(--dim); font-size:12px; margin:8px 0 4px; }
+  select, input[type=file], textarea { width:100%; background:#0b1220; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px; }
+  textarea { min-height:80px; resize:vertical; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > div { flex:1; min-width:200px; }
+  button { background:var(--acc); color:#082f49; border:0; border-radius:8px; padding:10px 22px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:wait; }
+  button.ghost { background:transparent; color:var(--acc); border:1px solid var(--line); padding:2px 10px; font-size:12px; margin-left:8px; }
+  .msg-user { border-left:3px solid var(--acc); }
+  .msg-agent { border-left:3px solid var(--ok); }
+  .msg-err { border-left:3px solid var(--err); }
+  .who { color:var(--dim); font-size:12px; margin-bottom:6px; }
+  pre { white-space:pre-wrap; word-break:break-word; margin:0; font:inherit; }
+  .trace { margin-top:10px; border-top:1px dashed var(--line); padding-top:8px; color:var(--dim); font-size:12px; }
+  .trace code { color:var(--acc); }
+  .meta { color:var(--dim); font-size:12px; margin-top:8px; }
+  .meta a { color:var(--acc); }
+  details summary { cursor:pointer; color:var(--dim); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>无人机选址 Agent</h1>
+  <div class="sub">
+    <span id="sidLabel"></span> · <a href="/">返回 GIS 看板</a>
+    <button id="newSession" class="ghost">新会话</button>
+    <span id="busy"></span>
+  </div>
+
+  <div class="card">
+    <label>任务描述</label>
+    <textarea id="msg" placeholder="例如：对深圳做三阶段选址分析，比较 P=6/8/10 并给出推荐方案"></textarea>
+    <div class="row">
+      <div>
+        <label>城市（可选，上传数据时建议选）</label>
+        <select id="city">
+          <option value="">自动/由 Agent 判断</option>
+          <option value="beijing">北京</option>
+          <option value="hangzhou">杭州</option>
+          <option value="shenzhen">深圳</option>
+        </select>
+      </div>
+      <div>
+        <label>最大轮次</label>
+        <select id="maxSteps"><option>6</option><option selected>8</option><option>10</option></select>
+      </div>
+    </div>
+    <details>
+      <summary>上传真实数据（可选：stores 必需 / rdcs 建议 / distances 可选）</summary>
+      <div class="row">
+        <div><label>stores 候选起降点表 (.csv/.xlsx，至少含 pad_id,lat,lon)</label><input type="file" id="fStores" accept=".csv,.xlsx,.xls"></div>
+        <div><label>rdcs 候选机坪表（至少含 vertiport_id,lat,lon）</label><input type="file" id="fRdcs" accept=".csv,.xlsx,.xls"></div>
+        <div><label>distances 距离矩阵（可选）</label><input type="file" id="fDist" accept=".csv,.xlsx,.xls"></div>
+      </div>
+    </details>
+    <div style="margin-top:12px"><button id="send">发送</button></div>
+  </div>
+
+  <div id="chat"></div>
+</div>
+
+<script>
+const chat = document.getElementById('chat');
+const busy = document.getElementById('busy');
+const sidLabel = document.getElementById('sidLabel');
+const SID_KEY = 'agent_session_id';
+let sessionId = localStorage.getItem(SID_KEY) || '';
+
+function setSession(id) {
+  sessionId = id || '';
+  if (sessionId) localStorage.setItem(SID_KEY, sessionId);
+  else localStorage.removeItem(SID_KEY);
+  sidLabel.textContent = sessionId ? `会话 ${sessionId}` : '新会话（未保存）';
+}
+
+function addCard(cls, who, html) {
+  const d = document.createElement('div');
+  d.className = 'card ' + cls;
+  d.innerHTML = `<div class="who">${who}</div>${html}`;
+  chat.appendChild(d);
+  d.scrollIntoView({behavior:'smooth', block:'end'});
+  return d;
+}
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+// 页面加载：若本地存有会话 id，拉取历史并回放（刷新/重开页面不丢上下文）
+async function restoreSession() {
+  if (!sessionId) { setSession(''); return; }
+  setSession(sessionId);
+  try {
+    const resp = await fetch(`/api/agent/session/${encodeURIComponent(sessionId)}`);
+    if (!resp.ok) { setSession(''); return; }
+    const data = await resp.json();
+    (data.messages || []).forEach(m => {
+      if (m.role === 'user') addCard('msg-user', '你', `<pre>${esc(m.content)}</pre>`);
+      else if (m.role === 'assistant') addCard('msg-agent', 'Agent', `<pre>${esc(m.content)}</pre>`);
+    });
+    if ((data.messages || []).length) {
+      addCard('msg-agent', '提示', `<pre>以上为历史对话，已恢复。继续提问即可（Agent 会记得上文）。</pre>`);
+    }
+  } catch (e) {
+    setSession('');
+  }
+}
+restoreSession();
+
+document.getElementById('newSession').onclick = () => {
+  setSession('');
+  chat.innerHTML = '';
+  addCard('msg-agent', '提示', '<pre>已开启新会话，之前的历史不再参与本轮上下文。</pre>');
+};
+
+async function uploadFiles() {
+  const fd = new FormData();
+  const s = document.getElementById('fStores').files[0];
+  const r = document.getElementById('fRdcs').files[0];
+  const t = document.getElementById('fDist').files[0];
+  if (!s) return null;
+  fd.append('stores', s);
+  if (r) fd.append('rdcs', r);
+  if (t) fd.append('distances', t);
+  const resp = await fetch('/api/agent/upload', {method:'POST', body:fd});
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || '上传失败');
+  return data.paths;
+}
+
+document.getElementById('send').onclick = async () => {
+  const message = document.getElementById('msg').value.trim();
+  if (!message) return;
+  const btn = document.getElementById('send');
+  btn.disabled = true;
+  addCard('msg-user', '你', `<pre>${esc(message)}</pre>`);
+  const thinking = addCard('msg-agent', 'Agent', '<pre>思考与工具调用中…（选址引擎单次约需 1~2 分钟）</pre>');
+  try {
+    busy.textContent = '运行中…';
+    const paths = await uploadFiles();
+    const body = {message, city: document.getElementById('city').value,
+                  max_steps: +document.getElementById('maxSteps').value, files: paths || {},
+                  session_id: sessionId};
+    const resp = await fetch('/api/agent/chat', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '请求失败');
+    if (data.session_id) setSession(data.session_id);
+    let traceHtml = '';
+    if (data.trace && data.trace.length) {
+      const rows = data.trace.map(t => {
+        const calls = (t.called_tools||[]).map(c =>
+          `<code>${esc(c.name)}(${esc(JSON.stringify(c.args))})</code>`).join('<br>') || '(生成最终结论)';
+        return `<div>第${t.step}步 · ${t.elapsed_ms}ms · ${calls}</div>`;
+      }).join('');
+      traceHtml = `<div class="trace"><b>工具调用轨迹</b>${rows}</div>`;
+    }
+    let meta = `<div class="meta">轮次 ${data.steps} · token ${data.total_tokens}`;
+    if (data.report) meta += ` · <a href="/api/agent-outputs/${encodeURIComponent(data.report)}">下载完整报告</a>`;
+    meta += '</div>';
+    thinking.innerHTML = `<div class="who">Agent</div><pre>${esc(data.final || '(无结论)')}</pre>${traceHtml}${meta}`;
+  } catch (e) {
+    thinking.className = 'card msg-err';
+    thinking.innerHTML = `<div class="who">出错</div><pre>${esc(e.message)}</pre>`;
+  } finally {
+    busy.textContent = '';
+    btn.disabled = false;
+  }
+};
+</script>
+</body>
+</html>

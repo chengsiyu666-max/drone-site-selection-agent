@@ -11,19 +11,96 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+
+def _load_dotenv() -> None:
+    """极简 .env 加载器：把项目根 .env 的 KEY=VALUE 读入 os.environ。
+
+    仅当环境变量尚不存在时设置（不覆盖系统已配置的值）。文件已被 .gitignore 忽略，
+    用于存放本地密钥（如 DEEPSEEK_TOKEN），确保密钥不进 git、不打印。
+    """
+    try:
+        env_path = Path(__file__).resolve().parent / ".env"
+        if not env_path.exists():
+            return
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except Exception:
+        # 加载失败不阻断应用启动，回退到已存在/空的环境变量。
+        pass
+
+
+_load_dotenv()
+
 DEEPSEEK_BASE = "https://api.deepseek.com/v1"
 DEEPSEEK_TOKEN = os.environ.get("DEEPSEEK_TOKEN", "")
 DEEPSEEK_MODEL = "deepseek-chat"
 
+# 高德开放平台 Web 服务 key（逆地理编码，做经纬度→商圈/街道转译）。
+AMAP_KEY = os.environ.get("AMAP_KEY", "")
+
+# 逆地理编码内存缓存（按坐标懒加载，避免每次对话重复打高德、省配额）
+_regeo_cache: Dict[Tuple[float, float], str] = {}
+
+
+def _amap_regeo_label(lat: float, lon: float) -> str:
+    """
+    把经纬度逆地理编码成「区·街道(商圈)」可读标签；失败/无 key 返回空串。
+    带进程内缓存，同一坐标只请求一次。
+    """
+    if not AMAP_KEY or not is_valid_coord(lat, lon):
+        return ""
+    key = (round(lat, 5), round(lon, 5))
+    if key in _regeo_cache:
+        return _regeo_cache[key]
+    try:
+        payload = None
+        url = "https://restapi.amap.com/v3/geocode/regeo?" + urlencode(
+            {"key": AMAP_KEY, "location": f"{lon:.6f},{lat:.6f}", "extensions": "all"}
+        )
+        req = Request(url, headers={"User-Agent": "happy-monkey-site-model/1.0"})
+        with urlopen(req, timeout=6) as resp:
+            payload = resp.read().decode("utf-8", errors="ignore")
+        data = json.loads(payload)
+        if str(data.get("status")) != "1":
+            return ""
+        ac = (data.get("regeocode") or {}).get("addressComponent") or {}
+        district = ac.get("district") or ac.get("city") or ""
+        street = ac.get("street") or ac.get("township") or ""
+        bizes = [a.get("name") for a in (ac.get("businessAreas") or []) if (a or {}).get("name")]
+        biz = bizes[0] if bizes else ""
+        parts = [district, street, (f"商圈:{biz}" if biz else "")]
+        label = " ".join(p for p in parts if p)
+    except Exception:
+        label = ""
+    _regeo_cache[key] = label
+    return label
+
+
+def _coord_label(lat: float, lon: float) -> str:
+    """坐标的可读位置标签：优先逆地理编码，失败回退裸坐标。"""
+    label = _amap_regeo_label(lat, lon)
+    return f"({label})" if label else f"({lat:.5f},{lon:.5f})"
+
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 from openclaw_client import openclaw_chat, openclaw_chat_stream
+
+import session_store
+from rag_retriever import build_context_for_query
 
 from optimizer import (
     city_params,
     get_city_configs,
+    is_valid_coord,
     normalize_city,
-    parse_rdcs,
-    parse_stores,
+    parse_vertiports,
+    parse_pads,
     point_inner_ring_violation,
     run_full_model,
 )
@@ -32,9 +109,124 @@ from optimizer import (
 BASE_DIR = Path(__file__).resolve().parent
 SAMPLE_DIR = BASE_DIR / "sample_data"
 AGENT_OUTPUT_DIR = BASE_DIR / "agent_outputs"
-BUILTIN_EXISTING_STORES_FILE = SAMPLE_DIR / "existing_stores_beijing_hangzhou.csv"
+BUILTIN_EXISTING_PADS_FILE = SAMPLE_DIR / "existing_stores_beijing_hangzhou.csv"
 
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"), static_folder=str(BASE_DIR / "static"))
+
+# 最近一次成功选址结果的内存缓存，用于给 AI 访谈注入上下文。
+_LAST_RESULT: Dict[str, object] | None = None
+
+# 无人机低空配送选址行业的静态常识文本，作为 AI system 提示的背景知识。
+_AI_DOMAIN_KNOWLEDGE = (
+    "你是无人机低空物流配送网络选址规划助手。选址目标：在城市中从候选起降点中挑选网络节点，"
+    "并决定在哪些机坪（vertiport）投放无人机，以最大化配送单量覆盖。"
+    "关键概念：Stage1 按需求权重筛选起降点；Stage2 在运力约束下挑选覆盖单量最大的网络组合；"
+    "Stage3 在候选机坪中选择 P 个机坪并做最近邻配送分配，禁飞区与净空高度不足的机坪会被剔除。"
+    "回答时请结合下方提供的本次选址结果数据，用中文给出清晰、可执行的解释与建议。"
+)
+
+
+def _build_site_context(result: Dict[str, object]) -> str:
+    """
+    把最近一次选址结果压缩成一段结构化文本，作为 AI 的 system 上下文。
+    包含：summary、最优方案、各 P 值方案的覆盖指标。
+    """
+    try:
+        summary = result.get("summary") or {}
+        stage3 = result.get("stage3") or {}
+        scenarios = stage3.get("scenarios") or []
+        best_scenario = stage3.get("best_scenario") or {}
+
+        lines: List[str] = []
+        city = summary.get("focus_city") or "未知"
+        lines.append(f"【本次选址城市】{city}")
+        lines.append(
+            "【总体规模】候选起降点 {total}（其中存量 {existing}，新建候选 {new}）；"
+            "Stage1 通过 {s1}；Stage2 选中 {s2}；合格机坪候选 {vip} 个。".format(
+                total=summary.get("total_pad_rows", 0),
+                existing=summary.get("existing_pads", 0),
+                new=summary.get("new_pad_candidates", 0),
+                s1=summary.get("stage1_passed", 0),
+                s2=summary.get("stage2_selected", 0),
+                vip=summary.get("eligible_vertiports", 0),
+            )
+        )
+        if best_scenario:
+            lines.append(
+                "【最优方案】机坪数 P={p}，覆盖起降点 {c} 个，覆盖单量 {o}（万单/日），"
+                "加权平均配送距离 {d} km，占用机坪 {v} 座。".format(
+                    p=best_scenario.get("p"),
+                    c=best_scenario.get("covered_pad_count", 0),
+                    o=best_scenario.get("covered_orders_10k", 0),
+                    d=best_scenario.get("avg_distance_km", 0),
+                    v=best_scenario.get("open_vertiport_count", 0),
+                )
+            )
+            # 追加机坪与起降点的真实坐标明细，让 AI 能引用具体经纬度/归属关系。
+            vips = best_scenario.get("open_vertiports") or []
+            if vips:
+                v_rows = [
+                    "  - {vid} {name} (city={city}) {loc}".format(
+                        vid=v.get("vertiport_id"),
+                        name=v.get("name") or "",
+                        city=v.get("city") or "",
+                        loc=_coord_label(v.get("lat") or 0, v.get("lon") or 0),
+                    )
+                    for v in vips
+                ]
+                lines.append("【最优方案机坪坐标清单】共 {} 个：".format(len(vips)) + "\n" + "\n".join(v_rows))
+            assigns = best_scenario.get("assignments") or []
+            if assigns:
+                a_rows = []
+                for a in assigns:
+                    dist_text = f"{float(a.get('distance_km') or 0):.3f}km"
+                    zero_flag = "【零距离挂载】" if abs(float(a.get("distance_km") or 0)) < 0.01 else ""
+                    a_rows.append(
+                        "  - pad={pid} {pname} {loc} ← 归属机坪 {vid}，距离 {dist}，单量 {demand}万/日{zero}".format(
+                            pid=a.get("pad_id"),
+                            pname=a.get("pad_name") or "",
+                            loc=_coord_label(a.get("pad_lat") or 0, a.get("pad_lon") or 0),
+                            vid=a.get("vertiport_id"),
+                            dist=dist_text,
+                            demand=float(a.get("demand_sales_10k") or 0),
+                            zero=zero_flag,
+                        )
+                    )
+                lines.append("【最优方案起降点准入清单】共 {} 个：".format(len(assigns)) + "\n" + "\n".join(a_rows))
+        if scenarios:
+            rows = []
+            for s in sorted(scenarios, key=lambda x: int(x.get("p", 0) or 0)):
+                mark = "★推荐" if s.get("recommended") else ""
+                rows.append(
+                    f"P={s.get('p')}: 覆盖{s.get('covered_pad_count', 0)}点/"
+                    f"{s.get('covered_orders_10k', 0)}万单/平均距离{s.get('avg_distance_km', 0)}km/"
+                    f"机坪{s.get('open_vertiport_count', 0)}座{mark}"
+                )
+            lines.append("【各 P 值方案对比】" + "；".join(rows))
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def _build_ai_system_prompt(user_message: str) -> str:
+    """
+    组装 AI 的 system 提示词，包含三层：
+    1) 领域常识；2) 基于用户问题检索到的相关知识片段（RAG）；
+    3) 最近一次选址结果的结构化数据。
+    """
+    system_prompt = _AI_DOMAIN_KNOWLEDGE
+
+    # 检索式 RAG：按用户问题召回最相关的领域知识片段注入。
+    rag_text = build_context_for_query(user_message, top_k=4)
+    if rag_text:
+        system_prompt = system_prompt + "\n\n以下是检索到的领域知识库片段（如与问题相关请优先据此回答）：\n" + rag_text
+
+    if _LAST_RESULT is not None:
+        site_context = _build_site_context(_LAST_RESULT)
+        if site_context:
+            system_prompt = system_prompt + "\n\n以下是本次选址的实际结果数据：\n" + site_context
+
+    return system_prompt
 
 
 def _is_excel_bytes(raw: bytes) -> bool:
@@ -163,35 +355,35 @@ def chunked(seq: Sequence, size: int):
 def merge_distance_rows(primary_rows: List[Dict[str, object]], secondary_rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
     merged: Dict[Tuple[str, str], Dict[str, object]] = {}
     for row in primary_rows:
-        key = (str(row.get("rdc_id") or ""), str(row.get("store_id") or ""))
+        key = (str(row.get("vertiport_id") or ""), str(row.get("pad_id") or ""))
         if key[0] and key[1]:
             merged[key] = dict(row)
     for row in secondary_rows:
-        key = (str(row.get("rdc_id") or ""), str(row.get("store_id") or ""))
+        key = (str(row.get("vertiport_id") or ""), str(row.get("pad_id") or ""))
         if key[0] and key[1]:
             merged[key] = dict(row)
     return list(merged.values())
 
 
-def merge_store_rows(primary_rows: List[Dict[str, object]], secondary_rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
+def merge_pad_rows(primary_rows: List[Dict[str, object]], secondary_rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
     """
-    Merge store rows by `store_id`, keeping uploaded rows as authoritative and
+    Merge pad rows by `pad_id`, keeping uploaded rows as authoritative and
     appending only missing supplemental records.
     """
     seen_ids = set()
     merged: List[Dict[str, object]] = []
 
     for row in primary_rows:
-        store_id = str(row.get("store_id") or row.get("id") or "").strip()
-        if store_id:
-            seen_ids.add(store_id)
+        pad_id = str(row.get("pad_id") or row.get("id") or "").strip()
+        if pad_id:
+            seen_ids.add(pad_id)
         merged.append(dict(row))
 
     for row in secondary_rows:
-        store_id = str(row.get("store_id") or row.get("id") or "").strip()
-        if not store_id or store_id in seen_ids:
+        pad_id = str(row.get("pad_id") or row.get("id") or "").strip()
+        if not pad_id or pad_id in seen_ids:
             continue
-        seen_ids.add(store_id)
+        seen_ids.add(pad_id)
         merged.append(dict(row))
 
     return merged
@@ -224,41 +416,41 @@ def amap_distance_batch(origins: List[Tuple[str, float, float]], destination_lon
     return out
 
 
-def build_amap_distance_rows(store_rows: List[Dict[str, object]], rdc_rows: List[Dict[str, object]], amap_key: str, timeout_sec: int = 8):
-    stores = [s for s in parse_stores(store_rows) if -90 <= s.lat <= 90 and -180 <= s.lon <= 180]
-    rdcs = [r for r in parse_rdcs(rdc_rows) if -90 <= r.lat <= 90 and -180 <= r.lon <= 180]
+def build_amap_distance_rows(pad_rows: List[Dict[str, object]], vertiport_rows: List[Dict[str, object]], amap_key: str, timeout_sec: int = 8):
+    pads = [s for s in parse_pads(pad_rows) if -90 <= s.lat <= 90 and -180 <= s.lon <= 180]
+    vertiports = [r for r in parse_vertiports(vertiport_rows) if -90 <= r.lat <= 90 and -180 <= r.lon <= 180]
 
     warnings: List[str] = []
     rows: List[Dict[str, object]] = []
 
-    stores_by_city: Dict[str, List] = {}
-    rdcs_by_city: Dict[str, List] = {}
-    for s in stores:
-        stores_by_city.setdefault(s.city, []).append(s)
-    for r in rdcs:
-        rdcs_by_city.setdefault(r.city, []).append(r)
+    pads_by_city: Dict[str, List] = {}
+    vertiports_by_city: Dict[str, List] = {}
+    for s in pads:
+        pads_by_city.setdefault(s.city, []).append(s)
+    for r in vertiports:
+        vertiports_by_city.setdefault(r.city, []).append(r)
 
-    for city, city_stores in stores_by_city.items():
-        city_rdcs = rdcs_by_city.get(city, [])
-        if not city_rdcs:
+    for city, city_pads in pads_by_city.items():
+        city_vertiports = vertiports_by_city.get(city, [])
+        if not city_vertiports:
             continue
 
-        origins = [(r.rdc_id, r.lat, r.lon) for r in city_rdcs]
-        for store in city_stores:
+        origins = [(r.vertiport_id, r.lat, r.lon) for r in city_vertiports]
+        for pad in city_pads:
             for batch in chunked(origins, 20):
                 try:
-                    results = amap_distance_batch(batch, store.lon, store.lat, amap_key, timeout_sec=timeout_sec)
+                    results = amap_distance_batch(batch, pad.lon, pad.lat, amap_key, timeout_sec=timeout_sec)
                 except (HTTPError, URLError, TimeoutError, RuntimeError, ValueError) as exc:
-                    warnings.append(f"amap distance failed for {city}/{store.store_id}: {exc}")
+                    warnings.append(f"amap distance failed for {city}/{pad.pad_id}: {exc}")
                     continue
 
-                for rdc_id, km in results:
-                    rows.append({"rdc_id": rdc_id, "store_id": store.store_id, "distance_km": round(km, 6)})
+                for vertiport_id, km in results:
+                    rows.append({"vertiport_id": vertiport_id, "pad_id": pad.pad_id, "distance_km": round(km, 6)})
 
     return rows, warnings
 
 
-def parse_custom_rdcs(raw_json: str, focus_city: str | None = None) -> List[Dict[str, object]]:
+def parse_custom_vertiports(raw_json: str, focus_city: str | None = None) -> List[Dict[str, object]]:
     if not raw_json:
         return []
     try:
@@ -283,8 +475,8 @@ def parse_custom_rdcs(raw_json: str, focus_city: str | None = None) -> List[Dict
         rent_cap = float(cp.get("rent_cap_per_sqm_day") or 1.7)
         out.append(
             {
-                "rdc_id": str(item.get("rdc_id") or f"CUSTOM_{idx}"),
-                "name": str(item.get("name") or f"Custom RDC {idx}"),
+                "vertiport_id": str(item.get("vertiport_id") or f"CUSTOM_{idx}"),
+                "name": str(item.get("name") or f"Custom Vertiport {idx}"),
                 "city": city,
                 "lat": lat,
                 "lon": lon,
@@ -341,8 +533,8 @@ def city_configs():
     return jsonify({"cities": get_city_configs()})
 
 
-@app.post("/api/validate-rdc-point")
-def validate_rdc_point():
+@app.post("/api/validate-vertiport-point")
+def validate_vertiport_point():
     payload = request.get_json(silent=True) or {}
     city = str(payload.get("city") or "")
     lat = float(payload.get("lat") or 0.0)
@@ -365,25 +557,29 @@ def sample_file(filename: str):
 @app.post("/api/run")
 def run_model():
     try:
-        store_rows = parse_csv_upload(request.files.get("store_file"), "store_file")
-        rdc_rows = parse_csv_upload(request.files.get("rdc_file"), "rdc_file")
+        pad_rows = parse_csv_upload(request.files.get("pad_file"), "pad_file")
+        vertiport_rows = parse_csv_upload(request.files.get("vertiport_file"), "vertiport_file")
         uploaded_distance_rows = parse_csv_upload(request.files.get("distance_file"), "distance_file")
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
-    if not store_rows:
-        return jsonify({"error": "store_file is required and must be a valid CSV"}), 400
-    if not rdc_rows:
-        return jsonify({"error": "rdc_file is required and must be a valid CSV"}), 400
+    if not pad_rows:
+        return jsonify({"error": "pad_file is required and must be a valid CSV"}), 400
+    if not vertiport_rows:
+        return jsonify({"error": "vertiport_file is required and must be a valid CSV"}), 400
 
-    builtin_existing_rows = parse_csv_file(BUILTIN_EXISTING_STORES_FILE)
-    before_merge_store_rows = len(store_rows)
-    store_rows = merge_store_rows(store_rows, builtin_existing_rows)
-    builtin_existing_added = max(0, len(store_rows) - before_merge_store_rows)
+    builtin_existing_rows = parse_csv_file(BUILTIN_EXISTING_PADS_FILE)
+    before_merge_pad_rows = len(pad_rows)
+    pad_rows = merge_pad_rows(pad_rows, builtin_existing_rows)
+    builtin_existing_added = max(0, len(pad_rows) - before_merge_pad_rows)
 
     focus_city = normalize_city(request.form.get("focus_city", ""))
     max_new_stores = parse_int(request.form.get("max_new_stores"), 20)
     p_values = parse_p_values(request.form.get("p_values", "1,2,3,4,5"))
+    mature_pen_pct = parse_float(request.form.get("mature_penetration_pct"))
+    mature_penetration = float(mature_pen_pct or 60.0) / 100.0
+    drones_per_vertiport = int(parse_float(request.form.get("drones_per_vertiport"), 20.0) or 20.0)
+    drone_order_rate_hour = int(parse_float(request.form.get("drone_order_rate_hour"), 10.0) or 10.0)
     threshold_overrides = build_threshold_overrides(
         focus_city,
         request.form.get("npv_threshold_10k"),
@@ -391,9 +587,9 @@ def run_model():
         request.form.get("revenue_per_sqm_threshold_10k"),
     )
 
-    custom_rdcs = parse_custom_rdcs(request.form.get("custom_rdcs_json", ""), focus_city=focus_city)
-    if custom_rdcs:
-        rdc_rows = list(rdc_rows) + custom_rdcs
+    custom_vertiports = parse_custom_vertiports(request.form.get("custom_vertiports_json", ""), focus_city=focus_city)
+    if custom_vertiports:
+        vertiport_rows = list(vertiport_rows) + custom_vertiports
 
     use_road_distance = parse_bool(request.form.get("use_road_distance"), False)
     amap_key = (request.form.get("amap_key") or "").strip()
@@ -403,7 +599,7 @@ def run_model():
     distance_source = "uploaded_or_haversine"
 
     if use_road_distance and amap_key:
-        generated_distance_rows, amap_warnings = build_amap_distance_rows(store_rows, rdc_rows, amap_key)
+        generated_distance_rows, amap_warnings = build_amap_distance_rows(pad_rows, vertiport_rows, amap_key)
         distance_source = "amap_driving+uploaded_fallback"
 
     # merge_distance_rows: secondary overwrites primary.
@@ -414,13 +610,16 @@ def run_model():
 
     try:
         result = run_full_model(
-            store_rows=store_rows,
-            rdc_rows=rdc_rows,
+            pad_rows=pad_rows,
+            vertiport_rows=vertiport_rows,
             distance_rows=distance_rows,
             max_new_stores=max_new_stores,
             p_values=p_values,
-            focus_city=focus_city if focus_city in {"beijing", "hangzhou"} else "beijing",
+            focus_city=focus_city if focus_city in {"beijing", "hangzhou", "shenzhen"} else "beijing",
             threshold_overrides=threshold_overrides,
+            mature_penetration=mature_penetration,
+            drones_per_vertiport=drones_per_vertiport,
+            drone_order_rate_hour=drone_order_rate_hour,
         )
     except Exception as exc:
         return jsonify({"error": f"model execution failed: {exc}"}), 500
@@ -430,28 +629,42 @@ def run_model():
         "uploaded_distance_rows": len(uploaded_distance_rows),
         "amap_distance_rows": len(generated_distance_rows),
         "amap_warnings": amap_warnings[:40],
-        "custom_rdcs": len(custom_rdcs),
-        "builtin_existing_store_rows": len(builtin_existing_rows),
-        "builtin_existing_store_rows_added": builtin_existing_added,
+        "custom_vertiports": len(custom_vertiports),
+        "builtin_existing_pad_rows": len(builtin_existing_rows),
+        "builtin_existing_pad_rows_added": builtin_existing_added,
     }
+
+    global _LAST_RESULT
+    _LAST_RESULT = result
 
     return jsonify(result)
 
 
 @app.post("/api/run-sample")
 def run_sample_model():
-    store_rows = parse_csv_file(SAMPLE_DIR / "stores.csv")
-    rdc_rows = parse_csv_file(SAMPLE_DIR / "rdcs.csv")
-    uploaded_distance_rows = parse_csv_file(SAMPLE_DIR / "distances.csv")
+    focus_city = normalize_city(request.form.get("focus_city", ""))
+    # 城市特定样例数据目录（如 sample_data/shenzhen/）存在则优先使用，
+    # 否则回退到默认样例数据（beijing/hangzhou 合并样例）。
+    city_dir = SAMPLE_DIR / focus_city if focus_city else None
+    if city_dir is not None and city_dir.exists():
+        pad_rows = parse_csv_file(city_dir / "stores.csv")
+        vertiport_rows = parse_csv_file(city_dir / "rdcs.csv")
+        uploaded_distance_rows = parse_csv_file(city_dir / "distances.csv")
+    else:
+        pad_rows = parse_csv_file(SAMPLE_DIR / "stores.csv")
+        vertiport_rows = parse_csv_file(SAMPLE_DIR / "rdcs.csv")
+        uploaded_distance_rows = parse_csv_file(SAMPLE_DIR / "distances.csv")
 
-    builtin_existing_rows = parse_csv_file(BUILTIN_EXISTING_STORES_FILE)
-    before_merge_store_rows = len(store_rows)
-    store_rows = merge_store_rows(store_rows, builtin_existing_rows)
-    builtin_existing_added = max(0, len(store_rows) - before_merge_store_rows)
+    builtin_existing_rows = parse_csv_file(BUILTIN_EXISTING_PADS_FILE)
+    before_merge_pad_rows = len(pad_rows)
+    pad_rows = merge_pad_rows(pad_rows, builtin_existing_rows)
+    builtin_existing_added = max(0, len(pad_rows) - before_merge_pad_rows)
 
     focus_city = normalize_city(request.form.get("focus_city", ""))
     max_new_stores = parse_int(request.form.get("max_new_stores"), 20)
     p_values = parse_p_values(request.form.get("p_values", "1,2,3,4,5"))
+    mature_pen_pct = parse_float(request.form.get("mature_penetration_pct"))
+    mature_penetration = float(mature_pen_pct or 60.0) / 100.0
     threshold_overrides = build_threshold_overrides(
         focus_city,
         request.form.get("npv_threshold_10k"),
@@ -459,9 +672,9 @@ def run_sample_model():
         request.form.get("revenue_per_sqm_threshold_10k"),
     )
 
-    custom_rdcs = parse_custom_rdcs(request.form.get("custom_rdcs_json", ""), focus_city=focus_city)
-    if custom_rdcs:
-        rdc_rows = list(rdc_rows) + custom_rdcs
+    custom_vertiports = parse_custom_vertiports(request.form.get("custom_vertiports_json", ""), focus_city=focus_city)
+    if custom_vertiports:
+        vertiport_rows = list(vertiport_rows) + custom_vertiports
 
     use_road_distance = parse_bool(request.form.get("use_road_distance"), False)
     amap_key = (request.form.get("amap_key") or "").strip()
@@ -471,7 +684,7 @@ def run_sample_model():
     distance_source = "sample+uploaded_or_haversine"
 
     if use_road_distance and amap_key:
-        generated_distance_rows, amap_warnings = build_amap_distance_rows(store_rows, rdc_rows, amap_key)
+        generated_distance_rows, amap_warnings = build_amap_distance_rows(pad_rows, vertiport_rows, amap_key)
         distance_source = "sample+amap_driving+uploaded_fallback"
 
     # merge_distance_rows: secondary overwrites primary.
@@ -482,13 +695,14 @@ def run_sample_model():
 
     try:
         result = run_full_model(
-            store_rows=store_rows,
-            rdc_rows=rdc_rows,
+            pad_rows=pad_rows,
+            vertiport_rows=vertiport_rows,
             distance_rows=distance_rows,
             max_new_stores=max_new_stores,
             p_values=p_values,
-            focus_city=focus_city if focus_city in {"beijing", "hangzhou"} else "beijing",
+            focus_city=focus_city if focus_city in {"beijing", "hangzhou", "shenzhen"} else "beijing",
             threshold_overrides=threshold_overrides,
+            mature_penetration=mature_penetration,
         )
     except Exception as exc:
         return jsonify({"error": f"sample model execution failed: {exc}"}), 500
@@ -498,10 +712,13 @@ def run_sample_model():
         "uploaded_distance_rows": len(uploaded_distance_rows),
         "amap_distance_rows": len(generated_distance_rows),
         "amap_warnings": amap_warnings[:40],
-        "custom_rdcs": len(custom_rdcs),
-        "builtin_existing_store_rows": len(builtin_existing_rows),
-        "builtin_existing_store_rows_added": builtin_existing_added,
+        "custom_vertiports": len(custom_vertiports),
+        "builtin_existing_pad_rows": len(builtin_existing_rows),
+        "builtin_existing_pad_rows_added": builtin_existing_added,
     }
+
+    global _LAST_RESULT
+    _LAST_RESULT = result
 
     return jsonify(result)
 
@@ -528,12 +745,16 @@ def chat():
     if not user_message:
         return jsonify({"error": "no user message found"}), 400
 
+    # 组装带领域常识 + RAG 检索片段 + 选址结果的 system 提示词。
+    system_prompt = _build_ai_system_prompt(user_message)
+
     try:
         _t0 = time.perf_counter()
         reply, new_session_key = openclaw_chat(
             user_message=user_message,
             session_key=session_key or None,
             timeout=90,
+            system_prompt=system_prompt,
         )
         _elapsed_ms = (time.perf_counter() - _t0) * 1000
         app.logger.warning(
@@ -546,8 +767,9 @@ def chat():
             "choices": [{"message": {"role": "assistant", "content": reply}}],
             "session_key": new_session_key,
         })
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 502
+    except Exception as e:
+        # 将技术性异常替换为用户友好中文提示，避免暴露 WinError 等系统码。
+        return jsonify({"error": f"AI 服务暂时不可用，请稍后重试或联系管理员（{type(e).__name__}: {e}）"}), 502
 
 
 @app.post("/api/chat/stream")
@@ -566,6 +788,9 @@ def chat_stream():
     if not user_message:
         return jsonify({"error": "no user message found"}), 400
 
+    # 组装带领域常识 + RAG 检索片段 + 选址结果的 system 提示词。
+    system_prompt = _build_ai_system_prompt(user_message)
+
     def sse_gen():
         t0 = time.perf_counter()
         first_delta_ms = None
@@ -575,6 +800,7 @@ def chat_stream():
                 user_message=user_message,
                 session_key=session_key or None,
                 timeout=600,
+                system_prompt=system_prompt,
             ):
                 ev_type = ev.get("type")
                 if ev_type == "delta" and first_delta_ms is None:
@@ -585,7 +811,8 @@ def chat_stream():
         except GeneratorExit:
             raise
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            # 将技术性异常替换为用户友好中文提示，避免暴露 WinError 等系统码。
+            yield f"data: {json.dumps({'type': 'error', 'message': f'AI 服务暂时不可用，请稍后重试（{type(e).__name__}: {e}）'}, ensure_ascii=False)}\n\n"
         finally:
             total_ms = (time.perf_counter() - t0) * 1000
             first_str = f"{first_delta_ms:.0f}ms" if first_delta_ms is not None else "n/a"
@@ -638,6 +865,147 @@ def download_agent_output(filename: str):
         return jsonify({"error": "unsupported file type"}), 400
 
     return send_from_directory(base_dir, target.name, as_attachment=True)
+
+
+# ---------------------------------------------------------------------------
+# Agent 网页对话界面（/agent）：聊天 + 上传真实数据文件 + 查看工具调用轨迹
+# ---------------------------------------------------------------------------
+
+
+def _safe_upload_name(name: str) -> str:
+    """上传文件名白名单化：仅保留字母数字/点/下划线/短横线，防路径穿越。"""
+    base = os.path.basename(name or "")
+    cleaned = "".join(c for c in base if c.isalnum() or c in "._-")
+    return cleaned or "upload.csv"
+
+
+@app.get("/agent")
+def agent_page():
+    return render_template("agent.html")
+
+
+@app.get("/api/agent/session/<session_id>")
+def agent_session_detail(session_id: str):
+    """返回会话历史（供页面刷新后恢复对话）。"""
+    data = session_store.load_session(session_id)
+    if not data:
+        return jsonify({"error": "会话不存在或已失效"}), 404
+    return jsonify(
+        {
+            "session_id": data.get("session_id"),
+            "messages": data.get("messages") or [],
+            "dataset_ids": data.get("dataset_ids") or [],
+            "updated_at": data.get("updated_at"),
+        }
+    )
+
+
+@app.post("/api/agent/upload")
+def agent_upload():
+    """接收用户上传的真实数据文件（stores/rdcs/distances），落盘后返回服务器路径。"""
+    upload_dir = AGENT_OUTPUT_DIR / "uploads" / time.strftime("%Y%m%d_%H%M%S")
+    saved: Dict[str, str] = {}
+    try:
+        for field in ("stores", "rdcs", "distances"):
+            f = request.files.get(field)
+            if not f or not f.filename:
+                continue
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            name = f"{field}_{_safe_upload_name(f.filename)}"
+            target = upload_dir / name
+            f.save(str(target))
+            saved[field] = str(target)
+    except Exception as exc:
+        return jsonify({"error": f"上传失败: {exc}"}), 500
+    if "stores" not in saved:
+        return jsonify({"error": "至少需要上传 stores(候选起降点) 文件"}), 400
+    return jsonify({"ok": True, "paths": saved})
+
+
+@app.post("/api/agent/chat")
+def agent_chat():
+    """驱动一次选址 Agent 任务（多轮工具调用循环），返回最终结论与工具轨迹。"""
+    payload = request.get_json(silent=True) or {}
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "message 不能为空"}), 400
+    city = str(payload.get("city") or "").strip()
+    try:
+        max_steps = int(payload.get("max_steps") or 8)
+    except (TypeError, ValueError):
+        max_steps = 8
+    max_steps = max(2, min(max_steps, 12))
+    files = payload.get("files") or {}
+
+    # —— 会话持久化 / 多轮记忆 ——
+    raw_sid = str(payload.get("session_id") or "").strip()
+    if raw_sid and session_store.is_valid_session_id(raw_sid):
+        session = session_store.load_session(raw_sid) or session_store.create_session(raw_sid)
+    else:
+        session = session_store.create_session()
+    session_id = session["session_id"]
+    history = session.get("messages") or []
+
+    # 延迟 import：agent_tools 顶层 import 了本模块，顶层再 import 它会循环依赖。
+    from agent_orchestrator import run_agent
+    from agent_tools import dataset_exists, load_csv
+
+    task = message
+    if files.get("stores"):
+        try:
+            ds = load_csv(
+                str(files["stores"]),
+                str(files.get("rdcs") or ""),
+                str(files.get("distances") or ""),
+                city,
+            )
+        except ValueError as exc:
+            return jsonify({"error": f"数据文件校验失败: {exc}"}), 400
+        warn_text = "；".join(ds.get("warnings") or []) or "无"
+        task = (
+            f"用户已上传真实数据并注册为数据集 dataset_id={ds['dataset_id']}"
+            f"（起降点 {ds['stores_rows']} 行、机坪 {ds['rdcs_rows']} 行，数据警告：{warn_text}）。"
+            f"调用 run_site_selection 时必须传入 dataset_id='{ds['dataset_id']}'。\n"
+            f"用户问题：{message}"
+        )
+        session_store.add_dataset_id(session_id, str(ds["dataset_id"]))
+    else:
+        # 本轮没上传文件，但会话里已有可用数据集（同一进程内仍注册着）→ 提醒 Agent 继续使用。
+        alive = [i for i in (session.get("dataset_ids") or []) if dataset_exists(i)]
+        if alive:
+            task = (
+                f"本会话此前已上传数据并注册为 dataset_id={alive[-1]}，"
+                f"若本轮涉及选址，请调用 run_site_selection 时传入该 dataset_id。\n"
+                f"用户问题：{message}"
+            )
+
+    try:
+        result = run_agent(task=task, city=city or None, max_steps=max_steps, history=history)
+    except Exception as exc:
+        return jsonify({"error": f"Agent 执行失败: {exc}"}), 500
+
+    final_text = result.get("final") or ""
+    # 历史只存原始用户问题与最终结论（工具细节不落盘，避免上下文膨胀）
+    try:
+        session_store.append_message(session_id, "user", message)
+        if final_text:
+            session_store.append_message(session_id, "assistant", final_text)
+    except Exception:
+        pass  # 落盘失败不影响本次响应
+
+    report_name = None
+    if result.get("report_path"):
+        report_name = os.path.basename(str(result["report_path"]))
+    return jsonify(
+        {
+            "session_id": session_id,
+            "final": final_text,
+            "trace": result.get("trace") or [],
+            "steps": result.get("steps"),
+            "total_tokens": result.get("total_tokens"),
+            "report": report_name,
+        }
+    )
 
 
 if __name__ == "__main__":

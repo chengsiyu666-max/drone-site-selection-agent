@@ -5,19 +5,125 @@ OpenClaw WebSocket 客户端模块
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
 import uuid
 from typing import Generator
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import websocket
-
-import os
 
 WS_URL = os.environ.get("OPENCLAW_WS_URL", "ws://127.0.0.1:18789")
 TOKEN = os.environ.get("OPENCLAW_TOKEN", "")
 AGENT_ID = os.environ.get("OPENCLAW_AGENT_ID", "main")
+
+# DeepSeek 官方 OpenAI 兼容 REST 端点（WS 不可用时的回退通道）。
+DEEPSEEK_BASE = os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com/v1")
+DEEPSEEK_TOKEN = os.environ.get("DEEPSEEK_TOKEN", "")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+
+
+def _build_deepseek_messages(user_message: str, system_prompt: str | None) -> list:
+    messages = []
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_message})
+    return messages
+
+
+def _deepseek_headers() -> dict:
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {DEEPSEEK_TOKEN}",
+    }
+
+
+def deepseek_chat(
+    user_message: str,
+    system_prompt: str | None = None,
+    timeout: int = 90,
+) -> str:
+    """调用 DeepSeek 官方 OpenAI 兼容 REST 端点，成功返回回复文本；失败抛用户友好 RuntimeError。"""
+    if not DEEPSEEK_TOKEN:
+        raise RuntimeError("AI 服务暂未配置 API 令牌，请设置环境变量 DEEPSEEK_TOKEN 后重试")
+    body = json.dumps(
+        {
+            "model": DEEPSEEK_MODEL,
+            "messages": _build_deepseek_messages(user_message, system_prompt),
+            "stream": False,
+        }
+    ).encode("utf-8")
+    url = DEEPSEEK_BASE.rstrip("/") + "/chat/completions"
+    req = Request(url, data=body, headers=_deepseek_headers())
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            payload = resp.read().decode("utf-8", errors="ignore")
+    except HTTPError as exc:
+        raise RuntimeError(f"AI 服务请求失败(HTTP {exc.code})：{exc.reason}") from exc
+    except (URLError, TimeoutError) as exc:
+        cause = exc.reason if hasattr(exc, "reason") else exc
+        raise RuntimeError(f"AI 服务连接失败：{cause}") from exc
+    try:
+        data = json.loads(payload)
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, json.JSONDecodeError) as exc:
+        snippet = str(data.get("error") or payload[:200]) if "data" in locals() else payload[:200]
+        raise RuntimeError(f"AI 服务返回异常：{snippet}") from exc
+
+
+def deepseek_chat_stream(
+    user_message: str,
+    system_prompt: str | None = None,
+    timeout: int = 600,
+) -> Generator[dict, None, None]:
+    """DeepSeek 流式（SSE）回退通道，事件格式与 openclaw_chat_stream 保持一致。"""
+    if not DEEPSEEK_TOKEN:
+        yield {"type": "error", "message": "AI 服务暂未配置 API 令牌，请设置环境变量 DEEPSEEK_TOKEN 后重试"}
+        return
+    body = json.dumps(
+        {
+            "model": DEEPSEEK_MODEL,
+            "messages": _build_deepseek_messages(user_message, system_prompt),
+            "stream": True,
+        }
+    ).encode("utf-8")
+    url = DEEPSEEK_BASE.rstrip("/") + "/chat/completions"
+    req = Request(url, data=body, headers=_deepseek_headers())
+    try:
+        resp = urlopen(req, timeout=timeout)
+    except HTTPError as exc:
+        yield {"type": "error", "message": f"AI 服务请求失败(HTTP {exc.code})：{exc.reason}"}
+        return
+    except (URLError, TimeoutError) as exc:
+        cause = exc.reason if hasattr(exc, "reason") else exc
+        yield {"type": "error", "message": f"AI 服务连接失败：{cause}"}
+        return
+
+    text = ""
+    try:
+        for raw in resp:
+            line = raw.decode("utf-8", errors="ignore").strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                chunk = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+            piece = delta.get("content") or ""
+            if piece:
+                text += piece
+                yield {"type": "delta", "text": text}
+    except Exception as exc:
+        yield {"type": "error", "message": f"AI 服务流式响应中断：{exc}"}
+        return
+    yield {"type": "done", "text": text, "session_key": ""}
 
 CONNECT_PARAMS = {
     "minProtocol": 3,
@@ -48,7 +154,7 @@ def _send(ws: websocket.WebSocketApp, method: str, params: dict) -> str:
     return rid
 
 
-def openclaw_chat(user_message: str, session_key: str | None = None, timeout: int = 60) -> tuple[str, str]:
+def _openclaw_ws_chat(user_message: str, session_key: str | None = None, timeout: int = 60) -> tuple[str, str]:
     """
     向 OpenClaw 的 main agent 发送消息，返回 (reply_text, session_key)。
     session_key: 传入已有的会话 key，可跨请求保持记忆；None 则新建会话。
@@ -191,6 +297,26 @@ def openclaw_chat(user_message: str, session_key: str | None = None, timeout: in
     return state["text"] or "(暂无回复)", state["session_key"] or ""
 
 
+def openclaw_chat(
+    user_message: str,
+    session_key: str | None = None,
+    timeout: int = 60,
+    system_prompt: str | None = None,
+) -> tuple[str, str]:
+    """
+    对外入口：优先走 OpenClaw WebSocket；连接失败或超时无回复时，
+    自动回退到 DeepSeek 官方 OpenAI 兼容 REST 端点（需配置 DEEPSEEK_TOKEN）。
+    """
+    try:
+        reply, key = _openclaw_ws_chat(user_message, session_key=session_key, timeout=timeout)
+        if reply and reply != "(暂无回复)":
+            return reply, key
+    except RuntimeError:
+        pass  # WS 不可用 → 回退 DeepSeek
+    reply = deepseek_chat(user_message, system_prompt=system_prompt, timeout=timeout)
+    return reply, ""
+
+
 # ---------------------------------------------------------------------------
 # 流式版本:generator 形式,边收边 yield,给 SSE 端点用
 # ---------------------------------------------------------------------------
@@ -198,7 +324,7 @@ def openclaw_chat(user_message: str, session_key: str | None = None, timeout: in
 _STREAM_SENTINEL = object()
 
 
-def openclaw_chat_stream(
+def _openclaw_ws_stream(
     user_message: str,
     session_key: str | None = None,
     timeout: int = 600,
@@ -376,3 +502,25 @@ def openclaw_chat_stream(
             ws_app.close()
         except Exception:
             pass
+
+
+def openclaw_chat_stream(
+    user_message: str,
+    session_key: str | None = None,
+    timeout: int = 600,
+    system_prompt: str | None = None,
+) -> Generator[dict, None, None]:
+    """
+    对外入口：优先走 OpenClaw WebSocket 流式；若在产出任何内容前 WS 就失败
+    （连接被拒/超时等），自动回退到 DeepSeek REST 流式通道。
+    """
+    saw_content = False
+    for ev in _openclaw_ws_stream(user_message, session_key=session_key, timeout=timeout):
+        if ev.get("type") in ("delta", "done"):
+            saw_content = True
+        if ev.get("type") == "error" and not saw_content:
+            break  # WS 未能产出任何内容 → 回退 DeepSeek
+        yield ev
+    else:
+        return
+    yield from deepseek_chat_stream(user_message, system_prompt=system_prompt, timeout=timeout)

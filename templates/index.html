@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>某硬折扣社区超市 · 选址智能体</title>
+    <title>无人机配送停机坪选址 · 选址智能体</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -26,7 +26,7 @@
       <div class="brand">
         <div class="brand-logo brand-logo-mark" aria-hidden="true">S</div>
         <div class="brand-text">
-          <div class="brand-name">某硬折扣社区超市 <em>· 选址智能体</em></div>
+          <div class="brand-name">无人机配送停机坪选址 <em>· 选址智能体</em></div>
           <div class="brand-sub">Site Intelligence Platform</div>
         </div>
       </div>
@@ -47,6 +47,7 @@
         <select class="nav-city" name="focus_city" id="focusCity" form="modelForm">
           <option value="beijing" selected>北京</option>
           <option value="hangzhou">杭州</option>
+          <option value="shenzhen">深圳</option>
         </select>
         <div class="sponsor-badge">
           <span>某团商赛 Demo</span>
@@ -67,41 +68,31 @@
         </div>
         <div class="card-body">
           <form id="modelForm" class="stack">
-            <p class="form-section">城市 · 财务阈值</p>
-
-            <div class="city-readout" id="cityParamBox">
-              <div>WACC<b id="cityWacc">—</b></div>
-              <div>NPV阈值<b id="cityNpvDefault">—</b></div>
-              <div>DPP阈值<b id="cityDppDefault">—</b></div>
-            </div>
-
-            <label>
-              10年NPV阈值（万元）
-              <input type="number" step="0.1" name="npv_threshold_10k" id="npvThreshold" placeholder="默认随城市" />
-            </label>
-
-            <label>
-              动态回收期DPP（年）
-              <input type="number" step="0.1" name="dpp_threshold_years" id="dppThreshold" placeholder="默认5.0" />
-            </label>
-
-            <label>
-              坪效阈值（万元/㎡·年）
-              <input type="number" step="0.1" name="revenue_per_sqm_threshold_10k" id="revenueThreshold" placeholder="默认1.15" />
-            </label>
-
             <p class="form-section">网络规划</p>
 
             <label>
-              RDC 数量上限 P
-              <input type="number" id="pStepper" value="5" min="1" max="8" />
+              Vertiport 数量上限 P
+              <input type="number" id="pStepper" value="10" min="1" max="15" />
             </label>
 
-            <input type="hidden" name="p_values" id="pValues" value="1,2,3,4,5" />
+            <input type="hidden" name="p_values" id="pValues" value="1,2,3,4,5,6,7,8,9,10,11,12,13,14,15" />
+            <span id="rangeHint" class="readout-inline" style="font-size:12px;color:var(--ink-soft);">建议数据范围约 31.6km 见方（≈1000 km²）</span>
+
+            
 
             <label>
-              阶段二最多新增门店
-              <input type="number" name="max_new_stores" value="20" min="1" max="30" />
+              每机坪配备无人机数
+              <input type="number" name="drones_per_vertiport" value="20" min="1" max="200" />
+            </label>
+
+            <label>
+              单架无人机每小时配送单量
+              <input type="number" name="drone_order_rate_hour" value="10" min="1" max="50" />
+            </label>
+
+            <label>
+              阶段二最多新增起降点
+              <input type="number" name="max_new_stores" value="10" min="1" max="30" />
             </label>
 
             <details class="advanced-details">
@@ -123,12 +114,12 @@
               <summary>上传 CSV 数据文件</summary>
               <div class="stack" style="padding-top: 8px;">
                 <label>
-                  门店数据 CSV（必填）
-                  <input type="file" name="store_file" accept=".csv,.xlsx,.xls" />
+                  起降点数据 CSV（必填）
+                  <input type="file" name="pad_file" accept=".csv,.xlsx,.xls" />
                 </label>
                 <label>
-                  RDC 数据 CSV（必填）
-                  <input type="file" name="rdc_file" accept=".csv,.xlsx,.xls" />
+                  Vertiport 数据 CSV（必填）
+                  <input type="file" name="vertiport_file" accept=".csv,.xlsx,.xls" />
                 </label>
                 <label>
                   距离矩阵 CSV（可选）
@@ -156,14 +147,14 @@
       <!-- ----- CENTER: STAGE (KPI + MAP) ----- -->
       <section class="stage-wrap">
         <div class="kpi-overlay" id="summaryCards">
-          <div class="kpi"><div class="kpi-title">门店总量</div><div class="kpi-value">—</div></div>
+          <div class="kpi"><div class="kpi-title">起降点总量</div><div class="kpi-value">—</div></div>
           <div class="kpi"><div class="kpi-title">阶段一通过</div><div class="kpi-value">—</div></div>
           <div class="kpi"><div class="kpi-title">阶段二入选</div><div class="kpi-value">—</div></div>
           <div class="kpi"><div class="kpi-title">最优总成本</div><div class="kpi-value">—</div></div>
         </div>
 
         <div class="map-canvas">
-          <p id="stepIntro" class="step-intro">阶段一：查看候选门店在 NPV、DPP 与坪效阈值下的通过情况。</p>
+          <p id="stepIntro" class="step-intro">阶段一：查看候选起降点在 NPV、DPP 与坪效阈值下的通过情况。</p>
 
           <aside class="map-dock" id="mapDock">
             <button type="button" class="dock-toggle" id="dockToggle" title="收起/展开地图工具" aria-label="收起地图工具">
@@ -177,9 +168,9 @@
               <span><i class="dot pass"></i>通过</span>
               <span><i class="dot fail"></i>淘汰</span>
               <span><i class="dot selected"></i>阶段二入选</span>
-              <span><i class="dot existing-store"></i>阶段三现存</span>
-              <span><i class="dot new-store"></i>阶段三新增</span>
-              <span><i class="legend-warehouse">🏭</i>RDC仓库</span>
+              <span><i class="dot existing-pad"></i>阶段三现存</span>
+              <span><i class="dot new-pad"></i>阶段三新增</span>
+              <span><i class="legend-warehouse">🏭</i>停机坪仓库</span>
             </div>
 
             <div class="dock-row">
@@ -201,11 +192,11 @@
             </label>
 
             <div class="dock-actions">
-              <button type="button" id="toggleCustomRdc" class="btn btn-small">自定义 RDC</button>
+              <button type="button" id="toggleCustomRdc" class="btn btn-small">自定义 Vertiport</button>
               <button type="button" id="cycleStagesBtn" class="btn btn-small">自动轮播</button>
             </div>
 
-            <div class="dock-hint" id="customHint">点击地图可添加候选 RDC；若落入五环 / 绕城内会触发红色告警。</div>
+            <div class="dock-hint" id="customHint">点击地图可添加候选 Vertiport；若落入五环 / 绕城内会触发红色告警。</div>
             <div class="dock-hint" id="interactionState" style="color: var(--wine-dark); font-weight: 600;">当前：手动模式</div>
           </aside>
 
@@ -219,7 +210,7 @@
           <div class="card-head">
             <div>
               <div class="card-eyebrow">Cost Split</div>
-              <h3>全周期折现总成本（RDC vs 配送）</h3>
+              <h3>全周期折现总成本（Vertiport vs 配送）</h3>
             </div>
           </div>
           <div class="card-body">
@@ -264,7 +255,7 @@
         <div class="table-tabs" role="tablist" aria-label="明细表切换">
           <button class="tab active" data-tab="stage1" role="tab" aria-selected="true">阶段一筛选表</button>
           <button class="tab" data-tab="stage2" role="tab" aria-selected="false">阶段二优选表</button>
-          <button class="tab" data-tab="assign" role="tab" aria-selected="false">阶段三门店归属</button>
+          <button class="tab" data-tab="assign" role="tab" aria-selected="false">阶段三起降点归属</button>
         </div>
         <div id="tableWrap" class="table-wrap"></div>
       </section>

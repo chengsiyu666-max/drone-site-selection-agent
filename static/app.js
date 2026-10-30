@@ -4,7 +4,7 @@ const state = {
   step: "stage1",
   tableTab: "stage1",
   customRdcMode: false,
-  customRdcs: [],
+  customVertiports: [],
   customViolations: [],
   map: null,
   layers: {},
@@ -23,12 +23,8 @@ const els = {
   focusCity: document.getElementById("focusCity"),
   pStepper: document.getElementById("pStepper"),
   pValues: document.getElementById("pValues"),
+  rangeHint: document.getElementById("rangeHint"),
   status: document.getElementById("status"),
-  cityWacc: document.getElementById("cityWacc"),
-  cityNpvDefault: document.getElementById("cityNpvDefault"),
-  cityDppDefault: document.getElementById("cityDppDefault"),
-  npvThreshold: document.getElementById("npvThreshold"),
-  dppThreshold: document.getElementById("dppThreshold"),
   summaryCards: document.getElementById("summaryCards"),
   costBars: document.getElementById("costBars"),
   scenarioCards: document.getElementById("scenarioCards"),
@@ -75,10 +71,20 @@ function fmtPct(value, digits = 1) {
 }
 
 function buildPValues() {
-  const maxP = Math.max(1, Math.min(8, Number(els.pStepper.value) || 3));
+  const maxP = Math.max(1, Math.min(15, Number(els.pStepper.value) || 3));
   const values = [];
   for (let i = 1; i <= maxP; i += 1) values.push(i);
   els.pValues.value = values.join(",");
+  updateRangeHint();
+}
+
+function updateRangeHint() {
+  const p = Math.max(1, Number(els.pStepper.value) || 10);
+  const edge = 10 * Math.sqrt(p);
+  const area = edge * edge;
+  if (els.rangeHint) {
+    els.rangeHint.textContent = `建议数据范围约 ${edge.toFixed(1)}km 见方（≈${Math.round(area)} km²）`;
+  }
 }
 
 function setRunButtonsBusy(isBusy) {
@@ -147,14 +153,14 @@ function sparklineSVG(values) {
 }
 
 function popupForStage1(point) {
-  const cash = sparklineSVG(point.yearly_cashflow_10k || []);
   return `
     <div>
       <b>${point.name}</b><br/>
       城市：${point.city}<br/>
-      NPV：${fmt(point.npv_10k)} 万元<br/>
-      DPP：${fmt(point.dpp_years)} 年
-      ${cash}
+      覆盖单量：${fmt(point.covered_demand_10k)} 万元<br/>
+      预估日均架次：${point.est_daily_flights}<br/>
+      落地可行性：${point.space_ok ? "可行" : "受限"}<br/>
+      通过：${point.passed ? "是" : "否"}
     </div>
   `;
 }
@@ -204,19 +210,19 @@ function initMap() {
 
   state.map.on("click", onMapClickAddCustomRdc);
 
-  // Wire up delete buttons inside custom-RDC popups after they open.
+  // Wire up delete buttons inside custom-Vertiport popups after they open.
   state.map.on("popupopen", (evt) => {
     const root = evt.popup.getElement && evt.popup.getElement();
     if (!root) return;
-    const btn = root.querySelector(".custom-rdc-del");
+    const btn = root.querySelector(".custom-vertiport-del");
     if (!btn) return;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const id = btn.dataset.id;
-      state.customRdcs = state.customRdcs.filter((r) => r.rdc_id !== id);
+      state.customVertiports = state.customVertiports.filter((r) => r.vertiport_id !== id);
       state.map.closePopup();
       renderStepLayers();
-      setStatus(`已删除自定义RDC ${id}`, "success");
+      setStatus(`已删除自定义停机坪 ${id}`, "success");
     });
   });
 }
@@ -233,24 +239,7 @@ function getCurrentCityConfigs() {
 }
 
 function updateCityParamPanel() {
-  const focus = els.focusCity.value;
-  const city = state.cityConfigs[focus];
-
-  if (!city) return;
-
-  const p = city.params || {};
-  els.cityWacc.textContent = `${fmt((p.wacc || 0) * 100, 1)}%`;
-  els.cityNpvDefault.textContent = fmt(p.npv_threshold_10k, 1);
-  els.cityDppDefault.textContent = fmt(p.dpp_threshold_years, 1);
-
-  // Always refresh placeholders so they reflect the current focus city, even
-  // if the user has previously typed something.
-  els.npvThreshold.placeholder = `默认${fmt(p.npv_threshold_10k, 1)}`;
-  els.dppThreshold.placeholder = `默认${fmt(p.dpp_threshold_years, 1)}`;
-  const revEl = document.getElementById("revenueThreshold");
-  if (revEl && p.revenue_per_sqm_threshold_10k != null) {
-    revEl.placeholder = `默认${fmt(p.revenue_per_sqm_threshold_10k, 1)}`;
-  }
+  // 财务阈值面板已移除；保留空实现以兼容挂载点调用。
 }
 
 function drawBaseCityOverlays() {
@@ -292,8 +281,8 @@ function updateStepIntro() {
   if (!els.stepIntro) return;
 
   const defaultCopy = {
-    stage1: "阶段一：查看候选门店在 NPV、DPP 和坪效阈值下的通过情况。",
-    stage2: "阶段二：联合优化选店与网络，目标为新店修正NPV减去配送成本，且入选门店需满足修正NPV/DPP阈值。",
+    stage1: "阶段一：按单量密度（累计覆盖达前70%）与落地可行性筛选候选起降点。",
+    stage2: "阶段二：联合优化选店与网络，目标为新店修正NPV减去配送成本，且入选起降点需满足修正NPV/DPP阈值。",
     stage3: "阶段三：对比不同 P 情景下的联合最优方案（选店组合可能因 P 而异）。",
   };
 
@@ -305,22 +294,22 @@ function updateStepIntro() {
   if (state.step === "stage1") {
     const rows = (state.result.stage1?.rows || []).filter((r) => cityMatch(r.city));
     const passed = rows.filter((r) => Boolean(r.passed)).length;
-    els.stepIntro.textContent = `阶段一：当前视图共 ${rows.length} 个候选门店，其中 ${passed} 个通过硬约束筛选。`;
+    els.stepIntro.textContent = `阶段一：当前视图共 ${rows.length} 个候选起降点，其中 ${passed} 个通过硬约束筛选。`;
     return;
   }
 
   if (state.step === "stage2") {
     const selected = (state.result.stage2?.selected || []).filter((r) => cityMatch(r.city));
-    els.stepIntro.textContent = `阶段二：当前城市入选门店 ${selected.length} 家，可在地图中查看排他后最终点位。`;
+    els.stepIntro.textContent = `阶段二：当前城市入选起降点 ${selected.length} 家，可在地图中查看排他后最终点位。`;
     return;
   }
 
   const bestScenario = state.result.stage3?.best_scenario;
   if (bestScenario) {
-    const assignments = (bestScenario.assignments || []).filter((r) => cityMatch(r.store_city));
-    const existingCount = assignments.filter((r) => Boolean(r.store_is_existing)).length;
+    const assignments = (bestScenario.assignments || []).filter((r) => cityMatch(r.pad_city));
+    const existingCount = assignments.filter((r) => Boolean(r.pad_is_existing)).length;
     const newCount = assignments.length - existingCount;
-    els.stepIntro.textContent = `阶段三：最优 P=${bestScenario.p}，当前视图包含 ${assignments.length} 条门店归属关系（现存 ${existingCount}，新增 ${newCount}）。`;
+    els.stepIntro.textContent = `阶段三：最优 P=${bestScenario.p}，当前视图包含 ${assignments.length} 条起降点归属关系（现存 ${existingCount}，新增 ${newCount}）。`;
     return;
   }
 
@@ -359,7 +348,7 @@ function renderStepLayers() {
   const points = state.result?.gis?.stage1_points || [];
   const selected = state.result?.gis?.stage2_selected || [];
   const lines = state.result?.gis?.stage3_network_lines || [];
-  const openRdcs = state.result?.gis?.stage3_open_rdcs || [];
+  const openRdcs = state.result?.gis?.stage3_open_vertiports || [];
 
   const fit = [];
 
@@ -412,33 +401,33 @@ function renderStepLayers() {
         fillColor: "#f0a32f",
         fillOpacity: 1,
       })
-        .bindPopup(`<b>${s.name}</b><br/>修正NPV：${fmt(s.adjusted_npv_10k)} 万元`)
+        .bindPopup(`<b>${s.name}</b><br/>衰减后覆盖单量：${fmt(s.adjusted_demand_10k)} 万元<br/>预估日均架次：${fmt(s.adjusted_daily_flights)}`)
         .addTo(state.layers.stage2);
       fit.push([s.lat, s.lon]);
     });
   }
 
   if (state.step === "stage3") {
-    openRdcs.filter((r) => cityMatch(r.city)).forEach((rdc) => {
-      L.marker([rdc.lat, rdc.lon], {
+    openRdcs.filter((r) => cityMatch(r.city)).forEach((vertiport) => {
+      L.marker([vertiport.lat, vertiport.lon], {
         icon: createWarehouseIcon(markerScale),
       })
-        .bindPopup(`<b>${rdc.name}</b><br/>${rdc.city}<br/>全周期折现成本：${fmt(rdc.lifecycle_cost_10k)} 万元`)
+        .bindPopup(`<b>${vertiport.name}</b><br/>${vertiport.city}<br/>全周期折现成本：${fmt(vertiport.lifecycle_cost_10k)} 万元<br/>净空高度：${vertiport.altitude_limit_m} m${vertiport.is_no_fly_zone ? "<br/>⚠ 禁飞区" : ""}<br/>最大服务航程：${vertiport.max_flight_radius_km} km`)
         .addTo(state.layers.stage3);
-      fit.push([rdc.lat, rdc.lon]);
+      fit.push([vertiport.lat, vertiport.lon]);
     });
 
     lines
-      .filter((line) => cityMatch(line.store_city))
+      .filter((line) => cityMatch(line.pad_city))
       .forEach((line) => {
-        const isExisting = Boolean(line.store_is_existing);
+        const isExisting = Boolean(line.pad_is_existing);
         const storeColor = isExisting ? "#177e89" : "#f08a24";
-        const storeType = isExisting ? "现存门店" : "新增门店";
+        const storeType = isExisting ? "存量起降点" : "新增起降点";
 
         L.polyline(
           [
-            [line.store_lat, line.store_lon],
-            [line.rdc_lat, line.rdc_lon],
+            [line.pad_lat, line.pad_lon],
+            [line.vertiport_lat, line.vertiport_lon],
           ],
           {
             color: storeColor,
@@ -447,35 +436,35 @@ function renderStepLayers() {
           }
         )
           .bindPopup(
-            `<b>${line.store_name}</b>（${storeType}）→ <b>${line.rdc_name}</b><br/>距离：${fmt(line.distance_km)} km`
+            `<b>${line.pad_name}</b>（${storeType}）→ <b>${line.vertiport_name}</b><br/>距离：${fmt(line.distance_km)} km`
           )
           .addTo(state.layers.stage3);
 
-        L.circleMarker([line.store_lat, line.store_lon], {
+        L.circleMarker([line.pad_lat, line.pad_lon], {
           radius: 4 * markerScale,
           color: storeColor,
           fillColor: storeColor,
           fillOpacity: 0.8,
         })
-          .bindPopup(`<b>${line.store_name}</b><br/>门店类型：${storeType}`)
+          .bindPopup(`<b>${line.pad_name}</b><br/>起降点类型：${storeType}`)
           .addTo(state.layers.stage3);
 
-        fit.push([line.store_lat, line.store_lon], [line.rdc_lat, line.rdc_lon]);
+        fit.push([line.pad_lat, line.pad_lon], [line.vertiport_lat, line.vertiport_lon]);
       });
   }
 
-  // custom rdcs always visible
+  // custom vertiports always visible
   clearLayer(state.layers.custom);
-  state.customRdcs.forEach((rdc) => {
+  state.customVertiports.forEach((vertiport) => {
     const popupHtml = `
-      <div class="custom-rdc-popup">
-        <b>${rdc.name}</b><br/>
-        ${rdc.city}<br/>
-        自定义候选 RDC<br/>
-        <button type="button" class="custom-rdc-del btn btn-small" data-id="${rdc.rdc_id}">删除该点位</button>
+      <div class="custom-vertiport-popup">
+        <b>${vertiport.name}</b><br/>
+        ${vertiport.city}<br/>
+        自定义候选 Vertiport<br/>
+        <button type="button" class="custom-vertiport-del btn btn-small" data-id="${vertiport.vertiport_id}">删除该点位</button>
       </div>
     `;
-    L.circleMarker([rdc.lat, rdc.lon], {
+    L.circleMarker([vertiport.lat, vertiport.lon], {
       radius: 7 * markerScale,
       color: "#5a2ca0",
       fillColor: "#7d4ac2",
@@ -483,7 +472,7 @@ function renderStepLayers() {
     })
       .bindPopup(popupHtml)
       .addTo(state.layers.custom);
-    fit.push([rdc.lat, rdc.lon]);
+    fit.push([vertiport.lat, vertiport.lon]);
   });
 
   if (!fit.length) {
@@ -500,15 +489,14 @@ function renderSummary() {
   const summary = state.result?.summary || {};
   const meta = state.result?.meta || {};
   const entries = [
-    ["门店总量", summary.total_store_rows],
-    ["现存门店", summary.existing_stores],
+    ["起降点总量", summary.total_pad_rows],
+    ["存量起降点", summary.existing_pads],
     ["阶段一通过", summary.stage1_passed],
     ["阶段二入选", summary.stage2_selected],
-    ["合规RDC", summary.eligible_rdcs],
-    ["最优P", summary.best_p],
-    ["联合最优总成本(万元)", summary.best_total_cost_10k],
-    ["联合目标值(万元)", summary.best_joint_objective_10k],
-    ["自定义RDC", meta.custom_rdcs || 0],
+    ["合规停机坪", summary.eligible_vertiports],
+    ["最优P(物理推荐)", summary.best_p],
+    ["推荐覆盖起降点", state.result?.stage3?.best_scenario?.covered_pad_count],
+    ["自定义停机坪", meta.custom_vertiports || 0],
   ];
 
   els.summaryCards.innerHTML = entries
@@ -524,32 +512,30 @@ function renderSummary() {
 }
 
 function renderCostBars() {
+  // 纯选址口径：原财务成本柱状图改为「各 P 覆盖起降点数」对比。
   const scenarios = [...(state.result?.stage3?.scenarios || [])]
     .sort((a, b) => Number(a.p) - Number(b.p));
   if (!scenarios.length) {
-    els.costBars.innerHTML = "<div>暂无情景成本数据</div>";
+    els.costBars.innerHTML = "<div>暂无情景覆盖数据</div>";
     return;
   }
 
   const maxVal = Math.max(
-    ...scenarios.flatMap((s) => [Number(s.rdc_cost_10k) || 0, Number(s.delivery_cost_10k) || 0]),
+    ...scenarios.map((s) => Number(s.covered_pad_count) || 0),
     1
   );
 
   els.costBars.innerHTML = scenarios
     .map((s) => {
-      const rw = ((Number(s.rdc_cost_10k) || 0) / maxVal) * 100;
-      const dw = ((Number(s.delivery_cost_10k) || 0) / maxVal) * 100;
+      const cov = Number(s.covered_pad_count) || 0;
+      const rw = (cov / maxVal) * 100;
+      const droneTotal = Number(s.open_vertiport_count || s.p || 0) * 20;
       return `
         <div class="cost-row">
           <div>P${s.p}</div>
-          <div class="track"><div class="fill-rdc" style="width:${rw}%;"></div></div>
-          <div>${fmt(s.rdc_cost_10k)}</div>
-        </div>
-        <div class="cost-row">
-          <div></div>
-          <div class="track"><div class="fill-delivery" style="width:${dw}%;"></div></div>
-          <div>${fmt(s.delivery_cost_10k)}</div>
+          <div class="track"><div class="fill-vertiport" style="width:${rw}%;"></div></div>
+          <div>覆盖 ${fmt(cov, 0)} 点</div>
+          <div>无人机 ${fmt(droneTotal, 0)} 架</div>
         </div>
       `;
     })
@@ -568,13 +554,15 @@ function renderScenarioCards() {
 
   els.scenarioCards.innerHTML = scenarios
     .map((s) => {
-      const isBest = Number(bestP) === Number(s.p);
+      const isRec = Boolean(s.recommended);
+      const droneTotal = Number(s.open_vertiport_count || s.p || 0) * 20;
       return `
-        <div class="scenario-card ${isBest ? "best" : ""}">
-          <b>P=${s.p}</b><br/>
-          总成本：${fmt(s.total_cost_10k)} 万元<br/>
-          平均距离：${fmt(s.avg_distance_km)} km<br/>
-          ROI：${fmtPct(s.roi, 1)}
+        <div class="scenario-card ${isRec ? "best" : ""}">
+          <b>P=${s.p}${isRec ? " ★ 物理网络推荐" : ""}</b><br/>
+          覆盖起降点数：${fmt(s.covered_pad_count, 0)}<br/>
+          所需停机坪：${fmt(s.open_vertiport_count || s.p)}<br/>
+          所需无人机总数：${fmt(droneTotal, 0)} 架<br/>
+          平均配送距离：${fmt(s.avg_distance_km)} km
         </div>
       `;
     })
@@ -592,7 +580,7 @@ function renderHardAlerts() {
     list.push(`${a.name_a} 与 ${a.name_b} 距离 ${fmt(a.distance_m, 1)}m，不能同时开店。`);
   });
 
-  (state.result?.stage3?.rejected_rdcs || []).forEach((r) => {
+  (state.result?.stage3?.rejected_vertiports || []).forEach((r) => {
     (r.reasons || []).forEach((reason) => {
       list.push(`${r.name} 被剔除：${reason}`);
     });
@@ -639,13 +627,12 @@ function renderTableByTab() {
   if (state.tableTab === "stage1") {
     const rows = (state.result.stage1?.rows || []).filter((r) => cityMatch(r.city));
     els.tableWrap.innerHTML = buildTable(rows, [
-      { key: "store_id", label: "门店ID" },
-      { key: "name", label: "门店名称" },
+      { key: "pad_id", label: "起降点ID" },
+      { key: "name", label: "起降点名称" },
       { key: "city", label: "城市" },
-      { key: "rf_sales_10k", label: "RF销量(万元)" },
-      { key: "npv_10k", label: "NPV(万元)" },
-      { key: "dpp_years", label: "DPP(年)" },
-      { key: "revenue_per_sqm_10k", label: "坪效" },
+      { key: "covered_demand_10k", label: "单点覆盖单量(万元)" },
+      { key: "est_daily_flights", label: "预估日均架次" },
+      { key: "space_ok", label: "落地可行" },
       { key: "passed", label: "通过" },
       { key: "reasons", label: "原因" },
     ]);
@@ -655,31 +642,30 @@ function renderTableByTab() {
   if (state.tableTab === "stage2") {
     const rows = (state.result.stage2?.selected || []).filter((r) => cityMatch(r.city));
     els.tableWrap.innerHTML = buildTable(rows, [
-      { key: "store_id", label: "门店ID" },
-      { key: "name", label: "门店名称" },
+      { key: "pad_id", label: "起降点ID" },
+      { key: "name", label: "起降点名称" },
       { key: "city", label: "城市" },
-      { key: "base_sales_10k", label: "原始销量" },
-      { key: "attenuation_ratio", label: "保留比例" },
-      { key: "adjusted_sales_10k", label: "修正销量" },
-      { key: "base_npv_10k", label: "原始NPV" },
-      { key: "adjusted_npv_10k", label: "修正NPV" },
+      { key: "base_demand_10k", label: "初始覆盖单量" },
+      { key: "attenuation_ratio", label: "承载力保持" },
+      { key: "adjusted_demand_10k", label: "衰减后覆盖单量" },
+      { key: "adjusted_daily_flights", label: "预估日均架次" },
     ]);
     return;
   }
 
   const rows = (state.result.stage3?.best_scenario?.assignments || [])
-    .filter((r) => cityMatch(r.store_city))
+    .filter((r) => cityMatch(r.pad_city))
     .map((row) => ({
       ...row,
-      store_type: row.store_is_existing ? "现存门店" : "新增门店",
+      pad_type: row.pad_is_existing ? "存量起降点" : "新增起降点",
     }));
   els.tableWrap.innerHTML = buildTable(rows, [
-    { key: "store_id", label: "门店ID" },
-    { key: "store_name", label: "门店" },
-    { key: "store_type", label: "门店类型" },
-    { key: "store_city", label: "城市" },
-    { key: "rdc_id", label: "RDC ID" },
-    { key: "rdc_name", label: "RDC" },
+    { key: "pad_id", label: "起降点ID" },
+    { key: "pad_name", label: "起降点" },
+    { key: "pad_type", label: "起降点类型" },
+    { key: "pad_city", label: "城市" },
+    { key: "vertiport_id", label: "Vertiport ID" },
+    { key: "vertiport_name", label: "Vertiport" },
     { key: "distance_km", label: "距离(km)" },
   ]);
 }
@@ -758,7 +744,7 @@ function createPayloadFromForm(includeFiles = true) {
   }
 
   fd.set("p_values", els.pValues.value);
-  fd.set("custom_rdcs_json", JSON.stringify(state.customRdcs));
+  fd.set("custom_vertiports_json", JSON.stringify(state.customVertiports));
   return fd;
 }
 
@@ -818,7 +804,7 @@ async function onMapClickAddCustomRdc(evt) {
   const lon = evt.latlng.lng;
 
   try {
-    const resp = await fetch("/api/validate-rdc-point", {
+    const resp = await fetch("/api/validate-vertiport-point", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ city: focus, lat, lon }),
@@ -826,7 +812,7 @@ async function onMapClickAddCustomRdc(evt) {
     const rule = await resp.json();
 
     if (rule.violation) {
-      const msg = `${focus === "beijing" ? "北京" : "杭州"}自定义RDC点位违规：${rule.message}`;
+      const msg = `${focus === "beijing" ? "北京" : "杭州"}自定义停机坪点位违规：${rule.message}`;
       state.customViolations.unshift(msg);
       state.customViolations = state.customViolations.slice(0, 8);
       renderHardAlerts();
@@ -834,19 +820,19 @@ async function onMapClickAddCustomRdc(evt) {
       return;
     }
 
-    const idx = state.customRdcs.length + 1;
-    state.customRdcs.push({
-      rdc_id: `CUSTOM_${idx}`,
-      name: `自定义RDC ${idx}`,
+    const idx = state.customVertiports.length + 1;
+    state.customVertiports.push({
+      vertiport_id: `CUSTOM_${idx}`,
+      name: `自定义停机坪 ${idx}`,
       city: focus,
       lat,
       lon,
     });
     renderStepLayers();
     renderHardAlerts();
-    setStatus(`已添加自定义RDC ${idx}（${fmt(lat, 4)}, ${fmt(lon, 4)}）`);
+    setStatus(`已添加自定义停机坪 ${idx}（${fmt(lat, 4)}, ${fmt(lon, 4)}）`);
   } catch (err) {
-    setStatus(`校验自定义RDC失败：${err.message}`);
+    setStatus(`校验自定义停机坪失败：${err.message}`);
   }
 }
 
@@ -882,11 +868,11 @@ function bindEvents() {
 
   els.toggleCustomRdc.addEventListener("click", () => {
     state.customRdcMode = !state.customRdcMode;
-    els.toggleCustomRdc.textContent = state.customRdcMode ? "关闭自定义" : "自定义 RDC";
+    els.toggleCustomRdc.textContent = state.customRdcMode ? "关闭自定义" : "自定义 Vertiport";
     els.toggleCustomRdc.classList.toggle("active", state.customRdcMode);
     els.customHint.textContent = state.customRdcMode
-      ? "自定义模式已开启：点击地图添加候选 RDC 点。"
-      : "点击地图可添加候选 RDC；若落入五环 / 绕城内会触发红色告警。";
+      ? "自定义模式已开启：点击地图添加候选 Vertiport 点。"
+      : "点击地图可添加候选 Vertiport；若落入五环 / 绕城内会触发红色告警。";
   });
 
   if (els.markerScale) {
@@ -1239,7 +1225,7 @@ function chatAppendMsg(role, text) {
 
 function buildSystemContext() {
   const r = state.result;
-  if (!r) return "你是某硬折扣社区超市选址展示系统的AI分析助手，请用中文简洁回答用户问题。当前尚无分析结果，可回答选址相关的通用问题。";
+  if (!r) return "你是无人机配送停机坪选址选址展示系统的AI分析助手，请用中文简洁回答用户问题。当前尚无分析结果，可回答选址相关的通用问题。";
 
   const stage1 = r.stage1 || {};
   const stage2 = r.stage2 || {};
@@ -1249,18 +1235,19 @@ function buildSystemContext() {
   const rows = stage1.rows || [];
   const passCount = rows.filter((row) => Boolean(row.passed)).length;
   const selectedCount = (stage2.selected || []).length;
-  const eligibleCount = (stage3.eligible_rdcs || []).length;
-  const rejectedCount = (stage3.rejected_rdcs || []).length;
+  const eligibleCount = (stage3.eligible_vertiports || []).length;
+  const rejectedCount = (stage3.rejected_vertiports || []).length;
 
-  let ctx = `你是某硬折扣社区超市选址展示系统的AI分析助手，请用中文简洁回答用户问题。\n\n当前分析结果摘要：\n`;
-  ctx += `- 阶段一：共 ${rows.length} 个候选门店，${passCount} 个通过筛选，${rows.length - passCount} 个淘汰\n`;
-  ctx += `- 阶段二：排他后优选出 ${selectedCount} 家新开门店\n`;
-  ctx += `- 阶段三：合规 RDC ${eligibleCount} 个（被剔除 ${rejectedCount} 个）\n`;
+  let ctx = `你是无人机配送停机坪选址选址展示系统的AI分析助手，请用中文简洁回答用户问题。\n\n当前分析结果摘要：\n`;
+  ctx += `- 阶段一：共 ${rows.length} 个候选起降点，${passCount} 个通过筛选，${rows.length - passCount} 个淘汰\n`;
+  ctx += `- 阶段二：排他后优选出 ${selectedCount} 家新开起降点\n`;
+  ctx += `- 阶段三：合规 Vertiport ${eligibleCount} 个（被剔除 ${rejectedCount} 个）\n`;
 
   const best = stage3.best_scenario;
   if (best && best.p != null) {
-    ctx += `- 最优情景：P=${best.p}，总成本 ${fmt(best.total_cost_10k)} 万元，`;
-    ctx += `平均配送距离 ${fmt(best.avg_distance_km)} km，ROI ${fmtPct(best.roi, 1)}\n`;
+    ctx += `- 物理网络推荐：P=${best.p}，覆盖起降点 ${fmt(best.covered_pad_count, 0)} 个，`;
+    ctx += `所需无人机 ${fmt((Number(best.open_vertiport_count || best.p) * 20), 0)} 架，`;
+    ctx += `平均配送距离 ${fmt(best.avg_distance_km)} km\n`;
   }
 
   return ctx;

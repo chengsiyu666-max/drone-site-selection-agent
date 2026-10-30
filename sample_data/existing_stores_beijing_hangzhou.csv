@@ -1,4 +1,4 @@
-store_id,name,city,district_tag,lat,lon,rf_sales_10k,area_sqm,initial_investment_10k,annual_fixed_cost_10k,is_existing,source_note
+pad_id,name,city,district_tag,lat,lon,rf_sales_10k,area_sqm,initial_investment_10k,annual_fixed_cost_10k,is_existing,source_note
 EX_BJ_MTGG01,某硬折扣社区超市北京商投广场店,beijing,Mentougou,39.9342292,116.0950479,0,650,0,0,1,北京市门头沟区大峪中路2号院1号楼1层
 EX_BJ_CP01,某硬折扣社区超市北京昌平鼓楼南街店,beijing,Changping,40.2153953,116.2275584,0,650,0,0,1,北京市昌平鼓楼南街1-2号
 EX_HZ_DG01,某硬折扣社区超市杭州大关路店,hangzhou,Gongshu,30.3031475,120.1332563,0,650,0,0,1,杭州市拱墅区大关路291号1幢105室

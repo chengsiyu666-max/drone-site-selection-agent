@@ -1,4 +1,4 @@
-rdc_id,store_id,distance_km
+vertiport_id,pad_id,distance_km
 HR1,H01,39.822000
 HR1,H02,31.043000
 HR1,H03,38.430000

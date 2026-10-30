@@ -1,76 +1,69 @@
-# Community Supermarket Site Selection
+# 无人机低空物流选址 Agent
 
-> 面向社区超市扩张的门店选址与 RDC 配送网络联合优化系统。  
-> 从候选门店财务筛选、相邻新店蚕食控制，到区域配送中心选址与 AI 解释分析，提供一套可运行、可视化、可复现的决策工具。
+> 面向城市无人机配送网络的三阶段选址引擎 + 可自主调用工具的对话式 Agent。
+> 从候选起降点筛选、空域冲突衰减，到机坪（vertiport）投放与最近邻配送分配，提供一套可运行、可视化、可复现、可追问的决策工具。
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![Flask](https://img.shields.io/badge/Backend-Flask-000000?logo=flask&logoColor=white)
 ![Leaflet](https://img.shields.io/badge/GIS-Leaflet-199900?logo=leaflet&logoColor=white)
+![MCP](https://img.shields.io/badge/Protocol-MCP-blueviolet)
 ![License](https://img.shields.io/badge/License-MIT-green)
-
-![系统主界面：参数配置、GIS 地图与成本看板](docs/assets/stage3.png)
 
 ## 项目简介
 
-本项目来自某团商赛场景：一家社区超市品牌计划在北京、杭州等城市扩张，需要同时回答三个问题：哪些候选门店值得开、相邻新店是否会互相分流、需要开几个 RDC 才能支撑全网配送。
+本项目解决的问题：在低空物流场景中，如何为一个城市决定 **哪些起降点（pad）值得服务、在哪些机坪（vertiport）投放无人机、每个机坪覆盖哪些起降点**，以在运力约束下最大化配送需求覆盖。
 
-我将这个业务问题拆成一个三阶段联合优化系统：先用 NPV、DPP、坪效做单店财务筛选，再用距离衰减模型处理新店蚕食，最后用 P-median 思路枚举 RDC 组合并分配门店。系统提供 Flask 后端、Leaflet GIS 前端和 OpenClaw AI 对话助手，可以上传 CSV 或直接运行样例数据，在地图上查看三阶段结果。
+系统由两部分组成：
 
-## 界面速览
+1. **三阶段选址引擎**（纯 Python，无商业求解器）
+2. **选址 Agent**：基于 function calling 的多轮工具调用循环，支持知识库检索（RAG）、自定义数据上传、多轮会话记忆，并通过 MCP 协议把同一批工具暴露给外部客户端
 
-### Stage 1：单点财务筛选
+> 演进说明：本项目前身为某团商赛的「社区超市门店 + RDC 选址」系统，后将业务语义整体重写为无人机低空物流场景（门店 → 起降点，RDC → 机坪，财务 ROI 目标 → 物理网络覆盖目标），并在其上构建了 Agent 层。
 
-在 GIS 地图上查看候选门店通过/淘汰结果，结合 NPV、DPP、坪效阈值快速定位财务可行点位。
+## Agent 四层架构
 
-![Stage 1 单点筛选地图](docs/assets/stage1.png)
+```text
+┌─ 协议层   mcp_server.py        同一批工具以 MCP(stdio JSON-RPC) 暴露，长任务进度心跳
+├─ 编排层   agent_orchestrator.py 多轮工具循环、只读并行、checkpoint 续跑、trace、上下文裁剪
+├─ 上下文层 分层 system 提示（领域常识+工具规范+工作流）+ RAG 召回 + 会话历史
+└─ 工具层   agent_tools.py        run_site_selection / load_csv / get_city_configs
+                                  / regeo_label(高德逆地理) / rag_retrieve
+```
 
-### Stage 2：相邻新店蚕食控制
+核心设计决策：**MCP 与内部编排器共用同一份工具实现**（`agent_tools._TOOL_IMPLS`），协议层只是适配，不复制业务逻辑。
 
-对入选新店绘制 300m/500m 圈层，直观看到相邻门店的排他关系和客流分流风险。
+## 主要能力
 
-![Stage 2 蚕食优化地图](docs/assets/stage2.png)
+**三阶段选址引擎**
 
-### Stage 3：RDC 配送网络方案
+- Stage 1：按需求权重累计前 70% 门槛初筛起降点 + 场地/坐标落地校验
+- Stage 2：空域/噪声冲突衰减模型（280m / 320–500m 分段衰减），最大化衰减后覆盖量，硬门槛 ≥ 20
+- Stage 3：机坪硬约束（禁飞区剔除、净空 < 3m 剔除、内环限飞区剔除、每机坪 ≤ 11 起降点、覆盖半径 5km），枚举 P=1..15 并按「覆盖点数降序、平均距离升序」标记推荐方案
 
-展示 RDC 与门店分配连线，对比不同 P 情景下的 RDC 成本、配送成本、平均距离和 ROI。
+**选址 Agent**
 
-![Stage 3 RDC 网络连线](docs/assets/stage3.png)
+- 多轮工具调用循环：LLM 自主决定调用选址引擎、逆地理编码、知识库检索
+- 只读工具线程池并行执行；每步落盘 checkpoint，可中断续跑
+- 完整 trace（工具名/参数/结果摘要/token/耗时），自动生成 Markdown 分析报告
+- 会话持久化到文件，支持多轮记忆与页面刷新恢复
 
-### 结果明细与 AI 分析助手
+**轻量 RAG（零向量库依赖）**
 
-明细表用于核对每个阶段的底层数据；AI 助手通过 SSE 流式返回，对选址结果、硬约束和成本结构做解释。
+- 纯 Python + numpy：段落切块 + 中文二元组/英文词 TF-IDF 余弦检索 + 查询词覆盖度门槛
+- 7 篇领域文档 / 129 个片段，内容全部与代码常量核对一致
+- 离线评测脚本 `eval_rag.py`：52 正例 + 12 负例，**关键词覆盖率 100%、完全命中率 100%、负例误召回 0%**
+- 检索结果带 `文件名#段N` 出处，回答可溯源
 
-| 明细表 | AI 助手 |
-| --- | --- |
-| ![阶段明细表](docs/assets/details.png) | ![AI 分析助手](docs/assets/AIAgent.png) |
+**MCP Server**
 
-## 技术亮点
+- 零框架 stdio JSON-RPC 2.0：`initialize` / `tools/list` / `tools/call`
+- 长任务保活：客户端携带 `progressToken` 时，选址执行期间按间隔发送 `notifications/progress`（实测 38.5s 任务发出 9 条进度）
 
-**三阶段联合优化模型**  
-不是简单套用现成机器学习模型，而是围绕业务约束设计了“财务筛选 + 蚕食衰减 + RDC 网络优化”的完整求解链路。Stage 2 与 Stage 3 使用联合目标 `新增门店修正 NPV - 全网络配送成本 PV`，减少分段决策带来的偏差。
+**数据与地图**
 
-**纯 Python 求解器，无商业优化器依赖**  
-核心求解逻辑使用组合枚举、剪枝和 beam search 实现，不依赖 Gurobi/CPLEX。候选组合较小时精确枚举，组合爆炸时自动切换 beam search，保证演示数据可直接运行。
-
-**SSE 流式 AI 对话链路**  
-OpenClaw 侧通过 WebSocket 推送 agent 事件，后端用线程 + `queue.Queue` 转成 Flask SSE 流，再由前端增量渲染。这个设计把“长时间等待整段回复”的体验改为“尽快看到首字输出”，适合复杂分析任务。
-
-**WebSocket → Queue → SSE 跨线程桥接**  
-`openclaw_client.py` 在独立线程中维护 WebSocket 生命周期，主线程通过 generator 持续 yield `session/delta/done/error` 事件，避免阻塞 Flask 响应。
-
-**Leaflet 三阶段地图时间轴**  
-前端用 Vanilla JS + Leaflet.js 实现阶段切换、政策禁区、物流带、自定义 RDC 点位校验、RDC-门店连线和成本看板，没有引入重型前端框架。
-
-## 技术栈
-
-| 层 | 技术 |
-| --- | --- |
-| Backend | Python 3.12, Flask |
-| Optimization | Pure Python, combinations, pruning, beam search, haversine distance |
-| Frontend | HTML, CSS, Vanilla JavaScript |
-| GIS | Leaflet.js, OpenStreetMap tiles |
-| AI Integration | OpenClaw WebSocket, DeepSeek-backed agent, SSE streaming |
-| Deployment | Tencent Cloud CVM, environment variables, shell deployment script |
+- 支持上传 CSV/Excel 真实数据（`load_csv`），最小契约：起降点 `pad_id/lat/lon`（需求量放 `rf_sales_10k`），机坪 `vertiport_id/lat/lon/altitude_limit_m`
+- 高德逆地理编码：把推荐机坪/起降点坐标转成「区·街道·商圈」可读标签，进程内缓存
+- Leaflet GIS 看板：三阶段时间轴、空域限制区、机坪-起降点连线
 
 ## 快速启动
 
@@ -78,94 +71,97 @@ OpenClaw 侧通过 WebSocket 推送 agent 事件，后端用线程 + `queue.Queu
 git clone https://github.com/philyang2003-byte/community_supermarket_site_selection.git
 cd community_supermarket_site_selection
 
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python -m venv .venv
+.venv\Scripts\activate          # Windows；Linux/Mac: source .venv/bin/activate
+pip install -r requirements.txt # 如需上传 Excel，另装 pandas
 
-python3 app.py
+cp .env.example .env            # 填入模型密钥与高德 Key
+python app.py
 ```
 
 打开：
 
-```text
-http://127.0.0.1:5001
-```
+- GIS 看板：<http://127.0.0.1:5001/>
+- Agent 对话：<http://127.0.0.1:5001/agent>
 
-点击 **运行样例** 即可使用 `sample_data/` 中的内置数据跑完整模型。
+点击「运行样例」或在 Agent 页直接提问「对深圳做一次选址，P 取 1,3,6,10 对比」即可复现完整链路。
 
-### 可选：启用 AI 对话
+### 环境变量（.env）
 
-AI 聊天不是运行优化模型的必要条件。如果需要启用，请设置环境变量：
+| 变量 | 用途 |
+| --- | --- |
+| `DEEPSEEK_TOKEN` | 模型 API 密钥（任何 OpenAI 兼容端点） |
+| `DEEPSEEK_BASE` | 端点地址，默认 `https://api.deepseek.com/v1`；境外端点（如 OpenRouter）需系统代理，代码已自动遵循 |
+| `DEEPSEEK_MODEL` | 模型名，默认 `deepseek-chat` |
+| `AMAP_KEY` | 高德 Web 服务 Key（逆地理编码，可选，缺省退回裸坐标） |
+
+密钥只从 `.env` / 环境变量读取，不入库、不打印（`.env` 已在 `.gitignore`）。
+
+### CLI 与评测
 
 ```bash
-export OPENCLAW_TOKEN="<your_openclaw_token>"
-export OPENCLAW_WS_URL="ws://127.0.0.1:18789"
-export OPENCLAW_AGENT_ID="main"
-python3 app.py
+python run_agent.py --task "对深圳做选址，P 取 1,3,6,10 对比" --city shenzhen   # 命令行跑 Agent
+python eval_rag.py                                                              # 复现 RAG 评测指标
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python mcp_server.py    # 验证 MCP
 ```
 
-也可以复制示例配置：
+## 样例实测结果（深圳，合成数据）
 
-```bash
-cp .env.example .env
-cp start.sh.example start.sh
-```
+漏斗：347 候选起降点 → Stage1 通过 116 → Stage2 选中 2 → 合格机坪 235 个。
 
-注意：项目没有强制依赖 `python-dotenv`，`.env` 主要作为配置模板；生产环境建议由 shell、systemd、容器平台或 CI/CD 注入环境变量。
+| P | 覆盖起降点 | 覆盖需求权重 | 平均距离 km | 推荐 |
+| --- | --- | --- | --- | --- |
+| 1 | 2 | 4,104.0 | 0.000 | |
+| 3 | 8 | 4,104.0 | 0.000 | |
+| 6 | 14 | 10,881.0 | 0.000 | |
+| **10** | **21** | **13,401.0** | **0.273** | ★ |
 
-## 项目结构
-
-```text
-.
-├── app.py                    # Flask API、CSV/Excel 解析、AMap 距离、SSE chat endpoints
-├── optimizer.py              # 三阶段选址与 RDC 网络联合优化核心
-├── openclaw_client.py        # OpenClaw WebSocket 客户端与 SSE 事件桥接
-├── templates/index.html      # 主页面模板
-├── static/
-│   ├── app.js                # 地图、表格、聊天、状态管理
-│   └── style.css             # 展示系统样式
-├── sample_data/              # 可直接运行的样例门店、RDC、距离矩阵
-├── docs/
-│   ├── MODEL.md              # 优化模型、公式和约束说明
-│   └── assets/               # README 展示截图
-├── .env.example              # 环境变量模板
-├── start.sh.example          # 启动脚本模板
-└── LICENSE                   # MIT License
-```
-
-## 模型概览
-
-1. **Stage 1：单店财务筛选**  
-   对每个新门店候选点计算 10 年 NPV、折现回收期 DPP 和坪效，过滤不满足城市阈值的点位。既有门店直接进入 Stage 3 网络规划。
-
-2. **Stage 2：新店蚕食优化**  
-   计算同城候选点间距离。距离过近时禁止同时开店，300m-500m 附近区域使用线性衰减降低销售与 NPV。
-
-3. **Stage 3：RDC + 门店联合优化**  
-   先用蓝牌通行、净高、三温仓、消防、租期、租金上限、禁区等硬约束筛选 RDC，再枚举不同 P 值下的 RDC 组合并分配门店，输出全网折现成本、配送距离和 ROI。
-
-更完整的公式、约束和搜索策略见 [docs/MODEL.md](docs/MODEL.md)。
+**口径说明（重要）**：`rf_sales_10k` 是样例合成的需求权重，不是真实日单量；平均距离含机坪与起降点同址的 0 距离边，会拉低均值；P=1/P=3 覆盖量相同是因为样例中 5 个存量起降点需求为 0 且与机坪同址。北京/杭州样例仅 3 个机坪，Stage3 无结果——深圳样例数据最完整，演示请用深圳。
 
 ## API 摘要
 
 | Endpoint | Method | 用途 |
 | --- | --- | --- |
-| `/` | GET | 返回主界面 |
-| `/api/cities` | GET | 城市 GIS 元数据与默认阈值 |
-| `/api/run` | POST | 上传门店/RDC/距离 CSV，运行完整模型 |
-| `/api/run-sample` | POST | 使用内置样例数据运行模型 |
-| `/api/validate-rdc-point` | POST | 校验自定义 RDC 是否落入禁区 |
-| `/api/chat/stream` | POST | AI 对话 SSE 流式端点 |
+| `/` | GET | GIS 看板主界面 |
+| `/agent` | GET | Agent 对话界面 |
+| `/api/run` / `/api/run-sample` | POST | 上传数据 / 内置样例运行选址模型 |
+| `/api/cities` | GET | 城市 GIS 元数据（仅支持北京/杭州/深圳） |
+| `/api/agent/chat` | POST | Agent 对话（支持 session_id 多轮记忆、上传文件） |
+| `/api/agent/upload` | POST | 上传 CSV/Excel 到临时目录 |
+| `/api/agent/session/<id>` | GET | 拉取会话历史（页面刷新恢复） |
+| `/api/agent-outputs` | GET | 列出/下载 Agent 生成的报告 |
+| `/api/chat/stream` | POST | 旧版流式聊天（OpenClaw fallback 通道） |
 
-## 输入数据
+## 项目结构
 
-最小可运行输入包括：
+```text
+.
+├── app.py                    # Flask API、样例装载、高德逆地理、Agent HTTP 端点
+├── optimizer.py              # 三阶段选址引擎核心
+├── agent_llm.py              # OpenAI 兼容 function-calling 客户端（遵循系统代理）
+├── agent_tools.py            # 工具注册表：选址/装载/检索/逆地理 + schema + 并行分发
+├── agent_orchestrator.py     # Agent 主循环：并行只读、checkpoint、trace、上下文裁剪
+├── session_store.py          # 会话文件持久化（agent_outputs/sessions/）
+├── rag_retriever.py          # 轻量 TF-IDF 检索器
+├── mcp_server.py             # 极简 MCP server（stdio JSON-RPC + 进度心跳）
+├── run_agent.py              # CLI 入口
+├── eval_rag.py               # RAG 离线评测（52 正例 + 12 负例）
+├── knowledge/                # 领域知识库（7 篇，129 片段）
+├── templates/                # index.html(GIS 看板) / agent.html(Agent 对话)
+├── sample_data/              # 三城样例数据
+└── docs/
+    ├── MODEL.md              # 模型、公式与约束
+    ├── DATA_UPLOAD.md        # 自定义数据契约与常见坑
+    └── DEMO.md               # 面试演示脚本
+```
 
-- `stores.csv`：门店候选点，包含 `store_id`, `city`, `lat`, `lon`, `rf_sales_10k`, `area_sqm`, `initial_investment_10k`, `annual_fixed_cost_10k`, `is_existing` 等字段。
-- `rdcs.csv`：RDC 候选点，包含坐标、面积、投资、租金、运营成本和硬约束字段。
-- `distances.csv`：可选距离矩阵。若缺失，模型使用经纬度 haversine 距离兜底。
+## 已知边界（诚实声明）
 
-仓库内置样例位于 [sample_data](sample_data)。
+- 覆盖单量为样例合成权重，**非真实业务数据**；财务成本字段沿用原超市数据占位，真实商用需重录造价与换电成本
+- 用户上传的数据集注册表保存在进程内存，**服务重启后需重新上传**
+- MCP 进度心跳只能缓解客户端空闲超时，硬超时极短的客户端仍可能断开（根治需两段式任务接口）
+- 境外模型端点依赖系统代理；国内端点（DeepSeek 官方）可直连
+- 无 pytest 单测，正确性验证依赖 `eval_rag.py` 与接口级冒烟测试
 
 ## License
 
