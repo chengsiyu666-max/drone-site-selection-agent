@@ -348,10 +348,18 @@ def rag_retrieve(
     except (TypeError, ValueError):
         ms = rag_retriever.DEFAULT_MIN_SCORE
     hits = rag_retriever.retrieve_knowledge(query, top_k=k, min_score=ms)
+    note = ""
+    if not hits and rag_retriever.is_out_of_scope(query):
+        note = (
+            "该话题属于知识库刻意不覆盖的范围（无人机法规/执照/航拍/购机咨询）。"
+            "请直接向用户说明「知识库没有这条规则，建议查阅官方渠道」，"
+            "不要用通用常识或模型自身记忆作答。"
+        )
     return {
         "query": query,
         "top_k": k,
         "hit_count": len(hits),
+        "note": note,
         "hits": [
             {
                 "ref": f"{h.get('source')}#段{h.get('para')}",

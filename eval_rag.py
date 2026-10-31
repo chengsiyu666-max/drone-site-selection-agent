@@ -2,9 +2,11 @@
 eval_rag.py — 知识库检索效果评测（可重复运行的基准）。
 
 测什么：
-1) 正例召回：15 条领域问题，检查 top-k 片段是否覆盖预期关键词（rule 是否被召回）。
-2) 负例拒答：5 条与领域无关的问题，检查是否被相关性阈值过滤为 0 命中（避免注入噪声）。
-3) 阈值扫描：对多组 min_score 对比上述指标，用数据选择阈值。
+1) 标准正例召回：52 条按文档术语出的领域问题，检查 top-k 片段是否覆盖预期关键词。
+2) 标准负例拒答：12 条领域外问题，检查是否被相关性门槛过滤为 0 命中。
+3) 口语化盲测：28 条刻意避开文档原词的问法 + 3 条话题相近但知识库未覆盖的硬核负例，
+   用来纠正「出题人改卷」偏差，更接近真实用户表现。
+4) 阈值扫描：对多组 min_score 对比上述指标，用数据选择阈值。
 
 用法：
     python eval_rag.py
@@ -96,17 +98,83 @@ NEGATIVE_CASES: List[str] = [
     "手机开不了机怎么修",
 ]
 
+# ---------------------------------------------------------------------------
+# 口语化盲测集：刻意避开文档原词、模拟真实用户问法，用来纠正"出题人改卷"偏差。
+# 正例的期望关键词仍取文档原文（验证口语问题能否召回正式规则）。
+# 该集合只增不改；任何检索器改进都不许反向参照本集合调参（防过拟合评测）。
+# ---------------------------------------------------------------------------
+BLIND_POSITIVE_CASES: List[Tuple[str, List[str]]] = [
+    ("机坪上方有广告牌挡着，这个点还能用吗？", ["净空", "3 米"]),
+    ("想在市中心最繁华的位置建机坪行不行？", ["内环限制区", "剔除"]),
+    ("机场旁边的点位是不是都不能用？", ["禁飞区", "剔除"]),
+    ("初筛大概会留下多大比例的点？", ["70%", "累计"]),
+    ("多小的一块场地就没法当起降点了？", ["80 平方米", "场地面积"]),
+    ("两个点挨得特别近会发生什么？", ["完全冲突", "280 米"]),
+    ("俩起降点隔着四百来米，单量会不会打折扣？", ["320 至 500 米", "下降"]),
+    ("覆盖量太低会不会直接被砍掉？", ["20", "淘汰"]),
+    ("一个停机坪带十几个点行不行？", ["11 个起降点"]),
+    ("机坪往外送最远能覆盖多远？", ["5 公里"]),
+    ("高峰期一个起降点一小时最多能接多少单？", ["32 单"]),
+    ("一个停机坪配几架飞机？", ["20 架"]),
+    ("一架飞机一小时能送几单货？", ["10 单", "每小时"]),
+    ("建一个停机坪大概要投多少钱？", ["40 万"]),
+    ("买一架无人机多少钱，能用几年？", ["6 万", "3 年"]),
+    ("机坪一年的人工开销要多少？", ["25 万"]),
+    ("送一单能赚多少，电费又要花多少？", ["6.5 元", "0.8 元"]),
+    ("深圳市中心多大范围内不让搞这个？", ["6.0 公里"]),
+    ("我自己的表格最少要准备哪几列才能跑？", ["pad_id", "lat", "lon"]),
+    ("机坪的表有列没填，结果全空了是为啥？", ["altitude_limit_m"]),
+    ("没给距离表也能跑吗，距离从哪来的？", ["球面距离", "haversine"]),
+    ("程序重启之后我之前传的数据还在不在？", ["重启", "重新上传"]),
+    ("结果里那个单量数字是真实订单吗？", ["合成", "权重"]),
+    ("平均距离算出来是零，是不是出 bug 了？", ["同址", "0 距离"]),
+    ("最多能对比几种机坪数量的方案？", ["1 到 15"]),
+    ("推荐方案是按什么标准挑出来的？", ["覆盖起降点数降序"]),
+    ("调市场渗透率会改变选出来的机坪吗？", ["渗透率", "财务"]),
+    ("上海能用这个系统做选址吗？", ["北京、杭州、深圳", "三座城市"]),
+]
+
+# 硬核负例：与无人机话题相关、但知识库确实没有覆盖，最容易被误召回。
+HARD_NEGATIVE_CASES: List[str] = [
+    "无人机考执照要多少钱？",
+    "大疆最新款无人机值不值得买？",
+    "无人机航拍需要提前报备吗？",
+]
+
+# ---------------------------------------------------------------------------
+# 留出集（holdout）：在检索器改进「完成之后」才写，只用于最终验收，不参与调参。
+# 若这里仍出现失败项，应如实保留并写进 README 的已知限制，而不是改到全过。
+# ---------------------------------------------------------------------------
+HOLDOUT_POSITIVE_CASES: List[Tuple[str, List[str]]] = [
+    ("北京五环以内能不能布机坪？", ["五环内近似圈"]),
+    ("杭州的内环半径是多少？", ["12.0 公里"]),
+    ("新建起降点最多能放进来几个？", ["max_new_stores", "10"]),
+    ("存量点位会被初筛淘汰吗？", ["存量起降点", "不参与"]),
+    ("表格里没写城市那一列会怎么样？", ["city 列", "补全"]),
+    ("除了 csv 还能传 excel 吗？", ["Excel", "xlsx"]),
+    ("深圳的折现率取多少？", ["深圳 10%"]),
+    ("推荐方案用什么符号标出来？", ["★"]),
+    ("禁飞区和净高这些检查在哪一步做？", ["Stage3"]),
+    ("一个机坪配 20 架飞机够不够用？", ["20 架"]),
+    ("单量权重是真实的每日订单数吗？", ["合成", "权重"]),
+    ("两个点离得太近，单量会被扣掉吗？", ["衰减"]),
+    ("为什么跑出来一个点都没覆盖？", ["机坪候选", "不足"]),
+    ("机坪数量开到 20 个会怎么样？", ["忽略"]),
+]
+
 
 def _hits(query: str, top_k: int, min_score: float) -> List[Dict]:
     return rag_retriever.retrieve_knowledge(query, top_k=top_k, min_score=min_score)
 
 
-def _eval_once(top_k: int, min_score: float, verbose: bool) -> Dict[str, float]:
+def _eval_once(top_k: int, min_score: float, verbose: bool,
+               pos_cases: List[Tuple[str, List[str]]],
+               neg_cases: List[str]) -> Dict[str, float]:
     coverages: List[float] = []
     top1_hit = 0
     details: List[str] = []
 
-    for q, kws in POSITIVE_CASES:
+    for q, kws in pos_cases:
         hits = _hits(q, top_k, min_score)
         joined = " ".join(h["text"] for h in hits)
         matched = [kw for kw in kws if kw in joined]
@@ -123,7 +191,7 @@ def _eval_once(top_k: int, min_score: float, verbose: bool) -> Dict[str, float]:
 
     neg_fp = 0
     neg_detail: List[str] = []
-    for q in NEGATIVE_CASES:
+    for q in neg_cases:
         hits = _hits(q, top_k, min_score)
         if hits:
             neg_fp += 1
@@ -140,8 +208,8 @@ def _eval_once(top_k: int, min_score: float, verbose: bool) -> Dict[str, float]:
     return {
         "coverage": sum(coverages) / len(coverages),
         "full_match_rate": sum(1 for c in coverages if c == 1.0) / len(coverages),
-        "top1_acc": top1_hit / len(POSITIVE_CASES),
-        "neg_fp_rate": neg_fp / len(NEGATIVE_CASES),
+        "top1_acc": top1_hit / len(pos_cases),
+        "neg_fp_rate": neg_fp / len(neg_cases) if neg_cases else 0.0,
     }
 
 
@@ -156,14 +224,16 @@ def main() -> int:
     print(f"知识库片段数: {len(rag_retriever._retriever.chunks) if rag_retriever._retriever.loaded else '(首次加载)'}")
     rag_retriever._retriever.ensure_loaded()
     print(f"知识库片段数: {len(rag_retriever._retriever.chunks)}"
-          f" | 正例 {len(POSITIVE_CASES)} 条 | 负例 {len(NEGATIVE_CASES)} 条 | top_k={args.top_k}\n")
+          f" | 标准正例 {len(POSITIVE_CASES)} 条 | 标准负例 {len(NEGATIVE_CASES)} 条"
+          f" | 盲测正例 {len(BLIND_POSITIVE_CASES)} 条 | 硬核负例 {len(HARD_NEGATIVE_CASES)} 条"
+          f" | top_k={args.top_k}\n")
 
     header = f"{'min_score':>10} | {'关键词覆盖率':>12} | {'完全命中率':>10} | {'Top1命中':>8} | {'负例误召回率':>12}"
     print(header)
     print("-" * len(header))
     rows = []
     for ms in thresholds:
-        m = _eval_once(args.top_k, ms, verbose=False)
+        m = _eval_once(args.top_k, ms, verbose=False, pos_cases=POSITIVE_CASES, neg_cases=NEGATIVE_CASES)
         rows.append((ms, m))
         print(f"{ms:>10.2f} | {m['coverage']:>12.1%} | {m['full_match_rate']:>10.1%} | "
               f"{m['top1_acc']:>8.1%} | {m['neg_fp_rate']:>12.1%}")
@@ -182,9 +252,30 @@ def main() -> int:
     print(f"项目默认阈值: min_score={rag_retriever.DEFAULT_MIN_SCORE}"
           f"（见 rag_retriever.py 的 DEFAULT_MIN_SCORE）")
 
+    # —— 口语化盲测（默认阈值，纠正出题人改卷偏差）——
+    ms = rag_retriever.DEFAULT_MIN_SCORE
+    blind = _eval_once(args.top_k, ms, verbose=False,
+                       pos_cases=BLIND_POSITIVE_CASES, neg_cases=HARD_NEGATIVE_CASES)
+    print(f"\n=== 口语化盲测（min_score={ms}，与标准集同一阈值） ===")
+    print(f"盲测正例 {len(BLIND_POSITIVE_CASES)} 条 + 硬核负例 {len(HARD_NEGATIVE_CASES)} 条")
+    print(f"关键词覆盖率: {blind['coverage']:.1%} | 完全命中率: {blind['full_match_rate']:.1%} | "
+          f"Top1命中: {blind['top1_acc']:.1%} | 硬核负例误召回: {blind['neg_fp_rate']:.1%}")
+
     if args.verbose:
-        print(f"\n=== 明细（min_score={rag_retriever.DEFAULT_MIN_SCORE}） ===")
-        _eval_once(args.top_k, rag_retriever.DEFAULT_MIN_SCORE, verbose=True)
+        print(f"\n=== 标准集明细（min_score={ms}） ===")
+        _eval_once(args.top_k, ms, verbose=True, pos_cases=POSITIVE_CASES, neg_cases=NEGATIVE_CASES)
+        print(f"\n=== 盲测集明细（min_score={ms}） ===")
+        _eval_once(args.top_k, ms, verbose=True, pos_cases=BLIND_POSITIVE_CASES, neg_cases=HARD_NEGATIVE_CASES)
+
+    # —— 留出集：最终验收，只跑一次、不参与调参 ——
+    hold = _eval_once(args.top_k, ms, verbose=False,
+                      pos_cases=HOLDOUT_POSITIVE_CASES, neg_cases=[])
+    print(f"\n=== 留出集（min_score={ms}，未参与调参） ===")
+    print(f"留出正例 {len(HOLDOUT_POSITIVE_CASES)} 条")
+    print(f"关键词覆盖率: {hold['coverage']:.1%} | 完全命中率: {hold['full_match_rate']:.1%} | "
+          f"Top1命中: {hold['top1_acc']:.1%}")
+    if args.verbose:
+        _eval_once(args.top_k, ms, verbose=True, pos_cases=HOLDOUT_POSITIVE_CASES, neg_cases=[])
     return 0
 
 
