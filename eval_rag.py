@@ -6,7 +6,9 @@ eval_rag.py — 知识库检索效果评测（可重复运行的基准）。
 2) 标准负例拒答：12 条领域外问题，检查是否被相关性门槛过滤为 0 命中。
 3) 口语化盲测：28 条刻意避开文档原词的问法 + 3 条话题相近但知识库未覆盖的硬核负例，
    用来纠正「出题人改卷」偏差，更接近真实用户表现。
-4) 阈值扫描：对多组 min_score 对比上述指标，用数据选择阈值。
+4) 回归集：上一轮留出集在机制修正时被逐条错误分析使用过，已污染，降级为开发/回归用途。
+5) 留出集：在机制修正完成之后独立构造、只跑一次、不参与调参，用于最终验收。
+6) 阈值扫描：对多组 min_score 对比上述指标，用数据选择阈值。
 
 用法：
     python eval_rag.py
@@ -142,10 +144,11 @@ HARD_NEGATIVE_CASES: List[str] = [
 ]
 
 # ---------------------------------------------------------------------------
-# 留出集（holdout）：在检索器改进「完成之后」才写，只用于最终验收，不参与调参。
-# 若这里仍出现失败项，应如实保留并写进 README 的已知限制，而不是改到全过。
+# 回归集：原「留出集」在机制修正轮被逐条错误分析使用过（见诊断记录），信息已泄露，
+# 不再具备留出验收资格，降级为开发阶段的回归用例，用于确认修正没有把旧问题改坏。
+# 最终验收使用文件末尾新构造的 HOLDOUT_POSITIVE_CASES。
 # ---------------------------------------------------------------------------
-HOLDOUT_POSITIVE_CASES: List[Tuple[str, List[str]]] = [
+REGRESSION_POSITIVE_CASES: List[Tuple[str, List[str]]] = [
     ("北京五环以内能不能布机坪？", ["五环内近似圈"]),
     ("杭州的内环半径是多少？", ["12.0 公里"]),
     ("新建起降点最多能放进来几个？", ["max_new_stores", "10"]),
@@ -160,6 +163,28 @@ HOLDOUT_POSITIVE_CASES: List[Tuple[str, List[str]]] = [
     ("两个点离得太近，单量会被扣掉吗？", ["衰减"]),
     ("为什么跑出来一个点都没覆盖？", ["机坪候选", "不足"]),
     ("机坪数量开到 20 个会怎么样？", ["忽略"]),
+]
+
+# ---------------------------------------------------------------------------
+# 留出集（holdout，独立构造）：在锚点词门控与同义映射扩充「完成之后」新写，
+# 题目与上文任何集合都不重复，期望关键词均直接取自 knowledge/ 原文。
+# 只用于最终验收：默认不运行，需显式 --holdout 才执行；跑完如实记录，不再回头为之调参。
+# ---------------------------------------------------------------------------
+HOLDOUT_POSITIVE_CASES: List[Tuple[str, List[str]]] = [
+    ("起降点表里需求量那一列叫什么名字？", ["rf_sales_10k"]),
+    ("需求量那几列都没写的话会按多少算？", ["按 0"]),
+    ("机坪的无人机数量能在界面上调吗？", ["drones_per_vertiport"]),
+    ("无人机维护费一年按什么比例算？", ["8%"]),
+    ("研发和管理一年要花多少钱？", ["200 万", "50 万"]),
+    ("杭州的折现率是多少？", ["杭州 11%"]),
+    ("深圳内环限制圈叫什么名字？", ["福田-罗湖中心区近似圈"]),
+    ("北京有哪些物流带？", ["马驹桥", "顺义空港"]),
+    ("整个规划期是多少年？", ["10 年"]),
+    ("机坪候选会先剪枝到多少个？", ["60 个"]),
+    ("峰值小时订单公式里除以几？", ["÷ 7", "4.687"]),
+    ("配送柜本身的建设成本是多少？", ["2 万"]),
+    ("如果 P 大于合格机坪数会怎样？", ["跳过"]),
+    ("city 列和所选城市对不上会怎样？", ["过滤", "空结果"]),
 ]
 
 
@@ -217,6 +242,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--top-k", type=int, default=4)
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--holdout", action="store_true",
+                    help="额外运行独立留出集（最终验收，只应跑一次）")
     args = ap.parse_args()
 
     thresholds = [0.0, 0.05, 0.10, 0.15, 0.20, 0.30]
@@ -226,6 +253,7 @@ def main() -> int:
     print(f"知识库片段数: {len(rag_retriever._retriever.chunks)}"
           f" | 标准正例 {len(POSITIVE_CASES)} 条 | 标准负例 {len(NEGATIVE_CASES)} 条"
           f" | 盲测正例 {len(BLIND_POSITIVE_CASES)} 条 | 硬核负例 {len(HARD_NEGATIVE_CASES)} 条"
+          f" | 回归 {len(REGRESSION_POSITIVE_CASES)} 条"
           f" | top_k={args.top_k}\n")
 
     header = f"{'min_score':>10} | {'关键词覆盖率':>12} | {'完全命中率':>10} | {'Top1命中':>8} | {'负例误召回率':>12}"
@@ -261,21 +289,32 @@ def main() -> int:
     print(f"关键词覆盖率: {blind['coverage']:.1%} | 完全命中率: {blind['full_match_rate']:.1%} | "
           f"Top1命中: {blind['top1_acc']:.1%} | 硬核负例误召回: {blind['neg_fp_rate']:.1%}")
 
+    # —— 回归集（上一轮留出集已污染，降级为开发期回归用例）——
+    reg = _eval_once(args.top_k, ms, verbose=False,
+                     pos_cases=REGRESSION_POSITIVE_CASES, neg_cases=[])
+    print(f"\n=== 回归集（min_score={ms}，机制修正后确认旧问题不回退） ===")
+    print(f"回归正例 {len(REGRESSION_POSITIVE_CASES)} 条")
+    print(f"关键词覆盖率: {reg['coverage']:.1%} | 完全命中率: {reg['full_match_rate']:.1%} | "
+          f"Top1命中: {reg['top1_acc']:.1%}")
+
     if args.verbose:
         print(f"\n=== 标准集明细（min_score={ms}） ===")
         _eval_once(args.top_k, ms, verbose=True, pos_cases=POSITIVE_CASES, neg_cases=NEGATIVE_CASES)
         print(f"\n=== 盲测集明细（min_score={ms}） ===")
         _eval_once(args.top_k, ms, verbose=True, pos_cases=BLIND_POSITIVE_CASES, neg_cases=HARD_NEGATIVE_CASES)
+        print(f"\n=== 回归集明细（min_score={ms}） ===")
+        _eval_once(args.top_k, ms, verbose=True, pos_cases=REGRESSION_POSITIVE_CASES, neg_cases=[])
 
-    # —— 留出集：最终验收，只跑一次、不参与调参 ——
-    hold = _eval_once(args.top_k, ms, verbose=False,
-                      pos_cases=HOLDOUT_POSITIVE_CASES, neg_cases=[])
-    print(f"\n=== 留出集（min_score={ms}，未参与调参） ===")
-    print(f"留出正例 {len(HOLDOUT_POSITIVE_CASES)} 条")
-    print(f"关键词覆盖率: {hold['coverage']:.1%} | 完全命中率: {hold['full_match_rate']:.1%} | "
-          f"Top1命中: {hold['top1_acc']:.1%}")
-    if args.verbose:
-        _eval_once(args.top_k, ms, verbose=True, pos_cases=HOLDOUT_POSITIVE_CASES, neg_cases=[])
+    # —— 留出集：独立构造，最终验收，只跑一次、不参与调参 ——
+    if args.holdout:
+        hold = _eval_once(args.top_k, ms, verbose=False,
+                          pos_cases=HOLDOUT_POSITIVE_CASES, neg_cases=[])
+        print(f"\n=== 留出集（min_score={ms}，独立构造、未参与调参） ===")
+        print(f"留出正例 {len(HOLDOUT_POSITIVE_CASES)} 条")
+        print(f"关键词覆盖率: {hold['coverage']:.1%} | 完全命中率: {hold['full_match_rate']:.1%} | "
+              f"Top1命中: {hold['top1_acc']:.1%}")
+    else:
+        print("\n（留出集默认不运行；最终验收请执行 python eval_rag.py --holdout，只跑一次）")
     return 0
 
 
