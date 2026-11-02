@@ -17,6 +17,7 @@ eval_rag.py — 知识库检索效果评测（可重复运行的基准）。
 from __future__ import annotations
 
 import argparse
+import math
 from typing import Dict, List, Tuple
 
 import rag_retriever
@@ -188,19 +189,68 @@ HOLDOUT_POSITIVE_CASES: List[Tuple[str, List[str]]] = [
 ]
 
 
-def _hits(query: str, top_k: int, min_score: float) -> List[Dict]:
-    return rag_retriever.retrieve_knowledge(query, top_k=top_k, min_score=min_score)
+def legacy_retrieve(query: str, top_k: int = 4, min_score: float = rag_retriever.DEFAULT_MIN_SCORE) -> List[Dict]:
+    """复刻机制修正前的旧逻辑：无查询扩展 + OOV 覆盖率门槛。
+
+    用于在同一组未污染留出集上做「同卷前后对比」，量化锚点门控与口语扩展带来的增益。
+    仅用于评测，不参与实际服务。
+    """
+    _r = rag_retriever._retriever
+    _r.ensure_loaded()
+    if not _r.chunks:
+        return []
+    if any(cue in query for cue in rag_retriever._OUT_OF_SCOPE_CUES):
+        return []
+    q_tokens = rag_retriever.tokenize(query)
+    if not q_tokens:
+        return []
+    # OOV 覆盖率门槛（旧逻辑核心）：未登录词占比 >= 0.75 且词数 >= 4 直接拒绝。
+    known = sum(1 for t in q_tokens if t in _r.idf)
+    oov_ratio = 1.0 - known / len(q_tokens)
+    if len(q_tokens) >= 4 and oov_ratio >= 0.75:
+        return []
+    q_tf: Dict[str, int] = {}
+    for t in q_tokens:
+        q_tf[t] = q_tf.get(t, 0) + 1
+    q_norm = math.sqrt(sum((1.0 + math.log(c)) ** 2 for c in q_tf.values())) or 1.0
+    q_vec = {t: (1.0 + math.log(c)) / q_norm * _r.idf.get(t, 1.0) for t, c in q_tf.items()}
+    q_terms = set(q_vec)
+    scored = []
+    for c in _r.chunks:
+        dot = sum(q_vec.get(t, 0.0) * w for t, w in c["wvec"].items() if t in q_terms)
+        overlap = len(q_terms & set(c["tokens"])) / len(q_terms) if q_terms else 0.0
+        score = dot + overlap * 0.2
+        if score > max(1e-9, min_score):
+            scored.append((score, c))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    seen = set()
+    out = []
+    for s, c in scored:
+        key = (c["src"], c["text"][:20])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"text": c["text"], "score": s, "source": c["src"], "para": c.get("para", 0)})
+        if len(out) >= top_k:
+            break
+    return out
+
+
+def _hits(query: str, top_k: int, min_score: float,
+          retrieve_fn=rag_retriever.retrieve_knowledge) -> List[Dict]:
+    return retrieve_fn(query, top_k=top_k, min_score=min_score)
 
 
 def _eval_once(top_k: int, min_score: float, verbose: bool,
                pos_cases: List[Tuple[str, List[str]]],
-               neg_cases: List[str]) -> Dict[str, float]:
+               neg_cases: List[str],
+               retrieve_fn=rag_retriever.retrieve_knowledge) -> Dict[str, float]:
     coverages: List[float] = []
     top1_hit = 0
     details: List[str] = []
 
     for q, kws in pos_cases:
-        hits = _hits(q, top_k, min_score)
+        hits = _hits(q, top_k, min_score, retrieve_fn)
         joined = " ".join(h["text"] for h in hits)
         matched = [kw for kw in kws if kw in joined]
         cov = len(matched) / len(kws)
@@ -307,12 +357,22 @@ def main() -> int:
 
     # —— 留出集：独立构造，最终验收，只跑一次、不参与调参 ——
     if args.holdout:
-        hold = _eval_once(args.top_k, ms, verbose=False,
-                          pos_cases=HOLDOUT_POSITIVE_CASES, neg_cases=[])
+        # 新逻辑（当前服务逻辑）
+        hold_new = _eval_once(args.top_k, ms, verbose=False,
+                              pos_cases=HOLDOUT_POSITIVE_CASES, neg_cases=[],
+                              retrieve_fn=rag_retriever.retrieve_knowledge)
+        # 旧逻辑（无扩展 + OOV 覆盖率门槛），用于同卷前后对比，量化机制修正的增益
+        hold_old = _eval_once(args.top_k, ms, verbose=False,
+                              pos_cases=HOLDOUT_POSITIVE_CASES, neg_cases=[],
+                              retrieve_fn=legacy_retrieve)
         print(f"\n=== 留出集（min_score={ms}，独立构造、未参与调参） ===")
         print(f"留出正例 {len(HOLDOUT_POSITIVE_CASES)} 条")
-        print(f"关键词覆盖率: {hold['coverage']:.1%} | 完全命中率: {hold['full_match_rate']:.1%} | "
-              f"Top1命中: {hold['top1_acc']:.1%}")
+        print(f"  旧逻辑（无扩展 + OOV 覆盖率门槛）：覆盖率 {hold_old['coverage']:.1%} | "
+              f"完全命中 {hold_old['full_match_rate']:.1%} | Top1 {hold_old['top1_acc']:.1%}")
+        print(f"  新逻辑（锚点门控 + 口语扩展）  ：覆盖率 {hold_new['coverage']:.1%} | "
+              f"完全命中 {hold_new['full_match_rate']:.1%} | Top1 {hold_new['top1_acc']:.1%}")
+        print(f"  同卷增益：覆盖率 +{hold_new['coverage'] - hold_old['coverage']:.1%} | "
+              f"Top1 +{hold_new['top1_acc'] - hold_old['top1_acc']:.1%}")
     else:
         print("\n（留出集默认不运行；最终验收请执行 python eval_rag.py --holdout，只跑一次）")
     return 0
